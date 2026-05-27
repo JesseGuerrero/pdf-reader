@@ -495,7 +495,7 @@ export function initPdfViewer() {
       refsRawText = grobidRefs.map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
 
       console.log('[grobid] referencesMap:', Object.keys(referencesMap).length, 'authorYearLookup:', Object.keys(authorYearLookup).length);
-      makeCitationsClickable();
+      renderPage();
     } catch (e) {
       console.warn('[grobid] Failed, falling back to regex parsing:', e);
     }
