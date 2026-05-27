@@ -42,9 +42,10 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
         String::new()
     }
 
-    // Parse bibliography entries
+    // Parse bibliography entries from <back> section only (skip header biblStruct)
     let mut refs = Vec::new();
-    for (i, bib) in xml.split("<biblStruct").skip(1).enumerate() {
+    let back_section = extract_between(&xml, "<back>", "</back>");
+    for (i, bib) in back_section.split("<biblStruct").skip(1).enumerate() {
         let xml_id = if let Some(id_start) = bib.find("xml:id=\"") {
             let after = &bib[id_start + 8..];
             if let Some(id_end) = after.find('"') {
