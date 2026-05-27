@@ -6,18 +6,21 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
     let pdf_bytes = std::fs::read(&pdf_path).map_err(|e| e.to_string())?;
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
 
     let form = reqwest::multipart::Form::new()
-        .part("input", reqwest::multipart::Part::bytes(pdf_bytes)
-            .file_name("paper.pdf")
-            .mime_str("application/pdf")
-            .unwrap());
+        .part(
+            "input",
+            reqwest::multipart::Part::bytes(pdf_bytes)
+                .file_name("paper.pdf")
+                .mime_str("application/pdf")
+                .unwrap(),
+        );
 
     let resp = client
-        .post("http://localhost:8070/api/processReferences")
+        .post("http://localhost:8070/api/processFulltextDocument")
         .multipart(form)
         .send()
         .await
@@ -29,9 +32,6 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
 
     let xml = resp.text().await.map_err(|e| e.to_string())?;
 
-    // Parse the TEI XML to extract references
-    let mut refs = Vec::new();
-
     fn extract_between(text: &str, open: &str, close: &str) -> String {
         if let Some(start) = text.find(open) {
             let after = &text[start + open.len()..];
@@ -42,31 +42,71 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
         String::new()
     }
 
+    // Parse bibliography entries
+    let mut refs = Vec::new();
     for (i, bib) in xml.split("<biblStruct").skip(1).enumerate() {
-        // Title: <title level="a" type="main">...</title>
-        let title = if let Some(t_start) = bib.find("<title level=\"a\" type=\"main\">") {
-            let after = &bib[t_start + 28..];
-            extract_between(&format!(">{}", after), ">", "</title>")
+        let xml_id = if let Some(id_start) = bib.find("xml:id=\"") {
+            let after = &bib[id_start + 8..];
+            if let Some(id_end) = after.find('"') {
+                after[..id_end].to_string()
+            } else {
+                String::new()
+            }
         } else {
-            // Fallback: first <title> in <analytic>
-            let analytic = extract_between(bib, "<analytic>", "</analytic>");
-            let t = extract_between(&analytic, "<title", "</title>");
-            if let Some(gt) = t.find('>') { t[gt + 1..].to_string() } else { t }
+            String::new()
         };
 
-        // Venue: <title level="j"> (journal) or <title level="m"> (book/proceedings) in <monogr>
+        let analytic = extract_between(bib, "<analytic>", "</analytic>");
         let monogr = extract_between(bib, "<monogr>", "</monogr>");
-        let venue = {
-            let j = extract_between(&monogr, "<title level=\"j\">", "</title>");
-            if !j.is_empty() { j }
-            else {
-                let m = extract_between(&monogr, "<title level=\"m\">", "</title>");
-                if !m.is_empty() { m }
-                else { extract_between(&monogr, "<meeting>", "</meeting>") }
+
+        let analytic_title = {
+            let t =
+                extract_between(&analytic, "<title level=\"a\" type=\"main\">", "</title>");
+            if !t.is_empty() {
+                t
+            } else {
+                let t2 = extract_between(&analytic, "<title", "</title>");
+                if let Some(gt) = t2.find('>') {
+                    t2[gt + 1..].to_string()
+                } else {
+                    String::new()
+                }
             }
         };
 
-        // Year: <date ... when="YYYY" /> or <date>YYYY</date>
+        let has_analytic_title = !analytic_title.is_empty();
+        let title = if has_analytic_title {
+            analytic_title
+        } else {
+            let t = extract_between(&monogr, "<title level=\"m\" type=\"main\">", "</title>");
+            if !t.is_empty() {
+                t
+            } else {
+                let t2 = extract_between(&monogr, "<title", "</title>");
+                if let Some(gt) = t2.find('>') {
+                    t2[gt + 1..].to_string()
+                } else {
+                    String::new()
+                }
+            }
+        };
+
+        let venue = {
+            let j = extract_between(&monogr, "<title level=\"j\">", "</title>");
+            if !j.is_empty() {
+                j
+            } else if has_analytic_title {
+                let m = extract_between(&monogr, "<title level=\"m\">", "</title>");
+                if !m.is_empty() {
+                    m
+                } else {
+                    extract_between(&monogr, "<meeting>", "</meeting>")
+                }
+            } else {
+                extract_between(&monogr, "<meeting>", "</meeting>")
+            }
+        };
+
         let year = {
             if let Some(d_start) = bib.find("<date") {
                 let date_tag = &bib[d_start..d_start + 100.min(bib.len() - d_start)];
@@ -75,17 +115,22 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
                     after.chars().take(4).collect::<String>()
                 } else {
                     extract_between(date_tag, ">", "</date>")
-                        .chars().filter(|c| c.is_ascii_digit()).take(4).collect()
+                        .chars()
+                        .filter(|c| c.is_ascii_digit())
+                        .take(4)
+                        .collect()
                 }
-            } else { String::new() }
+            } else {
+                String::new()
+            }
         };
 
-        // First author surname
         let first_author = extract_between(bib, "<surname>", "</surname>");
 
         if !title.is_empty() {
             refs.push(serde_json::json!({
                 "index": i + 1,
+                "xmlId": xml_id,
                 "title": title,
                 "venue": venue,
                 "year": year,
@@ -94,7 +139,57 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
         }
     }
 
-    Ok(serde_json::json!(refs))
+    // Parse inline citations from body
+    let mut citations = Vec::new();
+    let body = extract_between(&xml, "<body>", "</body>");
+    for cite_chunk in body.split("<ref type=\"bibr\"").skip(1) {
+        let target = if let Some(t_start) = cite_chunk.find("target=\"#") {
+            let after = &cite_chunk[t_start + 9..];
+            if let Some(t_end) = after.find('"') {
+                after[..t_end].to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let text = if let Some(gt) = cite_chunk.find('>') {
+            let after = &cite_chunk[gt + 1..];
+            if let Some(end) = after.find("</ref>") {
+                after[..end].trim().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if !text.is_empty() {
+            citations.push(serde_json::json!({
+                "text": text,
+                "target": target,
+            }));
+        }
+    }
+
+    // Binary classification: bracket [N] vs parenthetical (Author, Year)
+    let has_brackets = citations
+        .iter()
+        .filter(|c| !c["target"].as_str().unwrap_or("").is_empty())
+        .take(10)
+        .any(|c| {
+            c["text"]
+                .as_str()
+                .map_or(false, |t| t.contains('[') && t.chars().any(|ch| ch.is_ascii_digit()))
+        });
+    let style = if has_brackets { "bracket" } else { "parenthetical" };
+
+    Ok(serde_json::json!({
+        "style": style,
+        "references": refs,
+        "citations": citations,
+    }))
 }
 
 #[tauri::command]

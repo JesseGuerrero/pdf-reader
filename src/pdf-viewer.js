@@ -450,19 +450,24 @@ export function initPdfViewer() {
   }
 
   let grobidRefs = [];
+  let citationStyle = null;
+  let grobidCitations = [];
+  let xmlIdToIndex = {};
+  let authorYearLookup = {};
 
   async function loadGrobidRefs(pdfPath) {
     try {
       console.log('[grobid] Parsing references for:', pdfPath);
-      const refs = await invoke('parse_references_grobid', { pdfPath });
-      grobidRefs = refs || [];
-      console.log('[grobid] Got', grobidRefs.length, 'references');
+      const result = await invoke('parse_references_grobid', { pdfPath });
+      citationStyle = result.style || null;
+      grobidRefs = result.references || [];
+      grobidCitations = result.citations || [];
+      console.log('[grobid] style:', citationStyle, 'refs:', grobidRefs.length, 'citations:', grobidCitations.length);
 
-      // Populate referencesMap from GROBID results
       referencesMap = {};
+      xmlIdToIndex = {};
       for (const ref_ of grobidRefs) {
-        const key = ref_.index;
-        referencesMap[key] = {
+        referencesMap[ref_.index] = {
           fullText: `${ref_.firstAuthor} et al. ${ref_.title}. ${ref_.venue} (${ref_.year})`,
           title: ref_.title,
           venue: ref_.venue || '',
@@ -470,12 +475,27 @@ export function initPdfViewer() {
           month: '',
           firstAuthor: ref_.firstAuthor || '',
         };
+        if (ref_.xmlId) xmlIdToIndex[ref_.xmlId] = ref_.index;
       }
 
-      // Also populate refsRawText for parenthetical matching fallback
+      // Build author+year lookup from GROBID inline citations
+      authorYearLookup = {};
+      for (const cite of grobidCitations) {
+        if (!cite.target) continue;
+        const refIndex = xmlIdToIndex[cite.target];
+        if (!refIndex) continue;
+        const m = cite.text.match(/([A-Z][a-z]+).*?((?:19|20)\d{2}[a-z]?)/);
+        if (m) {
+          const key = m[1] + '_' + m[2];
+          authorYearLookup[key] = refIndex;
+          const baseKey = m[1] + '_' + m[2].replace(/[a-z]$/, '');
+          if (!authorYearLookup[baseKey]) authorYearLookup[baseKey] = refIndex;
+        }
+      }
+
       refsRawText = grobidRefs.map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
 
-      console.log('[grobid] referencesMap populated with', Object.keys(referencesMap).length, 'entries');
+      console.log('[grobid] referencesMap:', Object.keys(referencesMap).length, 'authorYearLookup:', Object.keys(authorYearLookup).length);
       makeCitationsClickable();
     } catch (e) {
       console.warn('[grobid] Failed, falling back to regex parsing:', e);
@@ -598,71 +618,6 @@ export function initPdfViewer() {
 
   let refsRawText = '';
 
-  function buildAuthorYearIndex() {
-    const index = [];
-
-    // For numbered references, use the parsed map
-    for (const [num, ref] of Object.entries(referencesMap)) {
-      const surname = ref.firstAuthor || '';
-      const yearMatch = ref.fullText.match(/\b(19|20)\d{2}[a-z]?\b/g);
-      if (surname && yearMatch) {
-        for (const year of yearMatch) {
-          index.push({ surname, year: year.replace(/[a-z]$/, ''), refNum: parseInt(num) });
-        }
-      }
-    }
-
-    // For author-year format (no brackets/numbers), search refs section directly
-    if (index.length === 0 && refsRawText) {
-      // Find all "Surname, Initials., ... Year." patterns in the raw refs text
-      const refEntryRe = /([A-Z][a-z]{2,}),\s+[A-Z]\./g;
-      const found = new Map();
-      let match;
-      while ((match = refEntryRe.exec(refsRawText)) !== null) {
-        const surname = match[1];
-        const after = refsRawText.slice(match.index, match.index + 500);
-        const yearMatch = after.match(/\b((?:19|20)\d{2})[a-z]?\b/);
-        if (!yearMatch) continue;
-        const year = yearMatch[1];
-        const key = surname + '_' + year;
-        if (found.has(key)) continue;
-
-        // Extract title: text after "Year. " up to next period-space-capital
-        const titleMatch = after.match(new RegExp(year + '[a-z]?\\b[.)]*\\s+(.+?)(?:\\.|$)'));
-        let title = titleMatch ? titleMatch[1].trim() : '';
-        if (title.length < 10) {
-          const afterYear = after.match(new RegExp(year + '[a-z]?\\b[.)]*\\s+(.{10,200})'));
-          if (afterYear) {
-            const sentEnd = afterYear[1].search(/\.\s+[A-Z]/);
-            title = sentEnd > 0 ? afterYear[1].slice(0, sentEnd) : afterYear[1].split('.')[0];
-          }
-        }
-
-        // Extract venue: sentence after title
-        let venue = '';
-        if (title) {
-          const titleIdx = after.indexOf(title);
-          if (titleIdx >= 0) {
-            const rest = after.slice(titleIdx + title.length).replace(/^\.\s*/, '');
-            if (/arXiv/i.test(rest.slice(0, 100))) venue = 'arXiv';
-            else {
-              const vm = rest.match(/^([A-Z][^.]{3,80})/);
-              if (vm) venue = vm[1].replace(/\s+\d.*$/, '').trim();
-            }
-          }
-        }
-
-        const refNum = found.size + 1;
-        found.set(key, true);
-        referencesMap[refNum] = { fullText: after.slice(0, 300), title, venue, year, month: '', firstAuthor: surname };
-        index.push({ surname, year, refNum });
-      }
-      console.log('[cite] author-year direct parse found:', index.length, 'entries');
-    }
-
-    return index;
-  }
-
   function makeCitationsClickable() {
     let citeLayer = pageWrapper.querySelector('.citeLayer');
     if (!citeLayer) {
@@ -675,15 +630,11 @@ export function initPdfViewer() {
     const wrapperRect = textLayerDiv.getBoundingClientRect();
     const spans = Array.from(textLayerDiv.querySelectorAll('span'));
 
-    // --- Parenthetical citations: (Author et al., Year) ---
-    const authorYearIndex = buildAuthorYearIndex();
-
-    // Build full text from spans, inserting spaces between spans that lack them
+    // Build full text from spans for range-based matching
     let fullText = '';
     const fullSegments = [];
     for (let si = 0; si < spans.length; si++) {
       const text = spans[si].textContent;
-      // Insert space between spans if needed (prevents "Gramacki" + "et al." → "Gramackiet al.")
       if (si > 0 && fullText.length > 0) {
         const lastChar = fullText[fullText.length - 1];
         const firstChar = text[0];
@@ -695,56 +646,36 @@ export function initPdfViewer() {
       fullText += text;
     }
 
-    // --- Parenthetical citations: search refsRawText directly ---
-    let parenOverlayCount = 0;
-    // Only run parenthetical matching if paper has NO bracket-style refs
-    const hasBracketRefs = Object.keys(referencesMap).some(k => parseInt(k) < 10000);
-    if (!hasBracketRefs && refsRawText.length > 100) {
-
-      // Match (Author..., Year) including multi-line spans
+    if (citationStyle === 'parenthetical') {
+      // Parenthetical citations: (Author et al., Year) mapped via GROBID
       const parenRe = /\(([^)]{5,300})\)/g;
       let pm;
-      let parenDebugCount = 0;
       while ((pm = parenRe.exec(fullText)) !== null) {
         const inner = pm[1];
         const parenStart = pm.index;
-        // Check if this looks like it could contain a citation
-        if (parenDebugCount < 5 && /[A-Z][a-z].*\d{4}/.test(inner)) {
-          console.log('[cite] paren candidate:', JSON.stringify(inner.slice(0, 100)));
-        }
-        // Split by semicolons for multi-citations
         const parts = inner.split(/;/);
         for (const part of parts) {
           const trimmed = part.trim();
           const citeMatch = trimmed.match(/([A-Z][a-z]+)(?:[\s.]+(?:et\s*al\.?|and\s+[A-Z][a-z]+))?[.,\s]*((?:19|20)\d{2}[a-z]?)/);
           if (!citeMatch) continue;
           const surname = citeMatch[1];
-          const year = citeMatch[2].replace(/[a-z]$/, '');
+          const yearFull = citeMatch[2];
+          const yearBase = yearFull.replace(/[a-z]$/, '');
 
-          // First try: match against GROBID/structured refs
-          let gRef = grobidRefs.find(r => r.firstAuthor === surname && r.year === year);
-          // Fuzzy: try matching just first 3 chars of surname
-          if (!gRef) gRef = grobidRefs.find(r => r.firstAuthor && r.firstAuthor.startsWith(surname.slice(0, 4)) && r.year === year);
-
-          let title, venue;
-          if (gRef) {
-            title = gRef.title;
-            venue = gRef.venue || '';
-          } else {
-            // Fallback: search refsRawText
-            const searchRe = new RegExp(surname + '.{0,300}?' + year + '[a-z]?\\b[.)]*\\s+(.{10,250}?)(?:\\. [A-Z]|\\.$)', 'i');
-            const refMatch = refsRawText.match(searchRe);
-            title = refMatch ? refMatch[1].trim().replace(/\.$/, '') : trimmed;
-            venue = '';
+          let refIndex = authorYearLookup[surname + '_' + yearFull]
+                      || authorYearLookup[surname + '_' + yearBase];
+          if (!refIndex) {
+            const prefix = surname.slice(0, 4);
+            for (const [k, v] of Object.entries(authorYearLookup)) {
+              if (k.startsWith(prefix + '_' + yearBase)) { refIndex = v; break; }
+            }
           }
+          if (!refIndex || !referencesMap[refIndex]) continue;
 
-          const refNum = 10000 + parenOverlayCount;
-          referencesMap[refNum] = { fullText: title, title, venue, year, month: '', firstAuthor: surname };
-          parenOverlayCount++;
           const partIdx = fullText.indexOf(trimmed, parenStart);
-          if (partIdx < 0) { console.log('[cite] partIdx not found for:', trimmed.slice(0, 40)); continue; }
+          if (partIdx < 0) continue;
           const partEnd = partIdx + trimmed.length;
-          // Create overlay
+
           const range = document.createRange();
           let rangeStartSet = false;
           for (const seg of fullSegments) {
@@ -761,6 +692,7 @@ export function initPdfViewer() {
             }
           }
           if (!rangeStartSet) continue;
+
           const clientRects = range.getClientRects();
           const pad = 2;
           for (let ri = 0; ri < clientRects.length; ri++) {
@@ -768,78 +700,78 @@ export function initPdfViewer() {
             if (rect.width < 2) continue;
             const el = document.createElement('div');
             el.className = 'cite-overlay';
-            el.dataset.ref = String(refNum);
+            el.dataset.ref = String(refIndex);
             el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
             el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
             el.style.width = (rect.width + pad * 2) + 'px';
             el.style.height = (rect.height + pad * 2) + 'px';
-            setupCiteOverlay(el, refNum);
+            setupCiteOverlay(el, refIndex);
             citeLayer.appendChild(el);
           }
         }
       }
-    }
+    } else {
+      // Bracket citations: [N]
+      for (const span of spans) {
+        const text = span.textContent;
+        if (!/\[\d/.test(text)) continue;
+        const allMatches = [...text.matchAll(/\[\d{1,4}\]/g)];
+        const valid = allMatches.filter(m => referencesMap[parseInt(m[0].match(/\d+/)[0])]);
+        if (valid.length === 0) continue;
 
-    // --- Bracket citations: wrap just [number] inline within spans ---
-    for (const span of spans) {
-      const text = span.textContent;
-      if (!/\[\d/.test(text)) continue;
-      const allMatches = [...text.matchAll(/\[\d{1,4}\]/g)];
-      const valid = allMatches.filter(m => referencesMap[parseInt(m[0].match(/\d+/)[0])]);
-      if (valid.length === 0) continue;
+        let html = '';
+        let last = 0;
+        const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        for (const m of valid) {
+          const num = parseInt(m[0].match(/\d+/)[0]);
+          html += esc(text.slice(last, m.index));
+          html += '<span class="cite-inline" data-ref="' + num + '">' + esc(m[0]) + '</span>';
+          last = m.index + m[0].length;
+        }
+        html += esc(text.slice(last));
+        span.innerHTML = html;
 
-      let html = '';
-      let last = 0;
-      const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      for (const m of valid) {
-        const num = parseInt(m[0].match(/\d+/)[0]);
-        html += esc(text.slice(last, m.index));
-        html += '<span class="cite-inline" data-ref="' + num + '">' + esc(m[0]) + '</span>';
-        last = m.index + m[0].length;
+        for (const ci of span.querySelectorAll('.cite-inline')) {
+          const refNum = parseInt(ci.dataset.ref);
+          const ref = referencesMap[refNum];
+          if (!ref) continue;
+          const title = ref.title || '';
+          const venue = ref.venue || '';
+          const year = ref.year || '';
+          const tag = venue || year ? ' (' + [venue, year].filter(Boolean).join(', ') + ')' : '';
+          const disp = title + tag;
+          const url = 'https://scholar.google.com/scholar?q=' + encodeURIComponent(title);
+
+          ci.addEventListener('click', (e) => {
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed) return;
+            e.stopPropagation();
+            if (onCitationChat) onCitationChat(refNum, disp, url);
+          });
+
+          let popup = null, pt = null;
+          ci.addEventListener('mouseenter', () => {
+            clearTimeout(pt);
+            if (popup) return;
+            popup = document.createElement('div');
+            popup.className = 'cite-popup';
+            popup.innerHTML = '<div class="cite-popup-title">' + disp + '</div><a class="cite-popup-link" href="' + url + '">Google Scholar ↗</a>';
+            popup.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+            popup.addEventListener('mouseenter', () => clearTimeout(pt));
+            popup.addEventListener('mouseleave', () => { pt = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200); });
+            const cr = ci.getBoundingClientRect();
+            const wr = pageWrapper.getBoundingClientRect();
+            popup.style.left = (cr.left - wr.left) + 'px';
+            popup.style.top = (cr.bottom - wr.top + 2) + 'px';
+            pageWrapper.appendChild(popup);
+          });
+          ci.addEventListener('mouseleave', () => {
+            pt = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200);
+          });
+        }
       }
-      html += esc(text.slice(last));
-      span.innerHTML = html;
-
-      for (const ci of span.querySelectorAll('.cite-inline')) {
-        const refNum = parseInt(ci.dataset.ref);
-        const ref = referencesMap[refNum];
-        if (!ref) continue;
-        const title = ref.title || '';
-        const venue = ref.venue || '';
-        const year = ref.year || '';
-        const tag = venue || year ? ' (' + [venue, year].filter(Boolean).join(', ') + ')' : '';
-        const disp = title + tag;
-        const url = 'https://scholar.google.com/scholar?q=' + encodeURIComponent(title);
-
-        ci.addEventListener('click', (e) => {
-          const sel = window.getSelection();
-          if (sel && !sel.isCollapsed) return;
-          e.stopPropagation();
-          if (onCitationChat) onCitationChat(refNum, disp, url);
-        });
-
-        let popup = null, pt = null;
-        ci.addEventListener('mouseenter', () => {
-          clearTimeout(pt);
-          if (popup) return;
-          popup = document.createElement('div');
-          popup.className = 'cite-popup';
-          popup.innerHTML = '<div class="cite-popup-title">' + disp + '</div><a class="cite-popup-link" href="' + url + '">Google Scholar ↗</a>';
-          popup.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
-          popup.addEventListener('mouseenter', () => clearTimeout(pt));
-          popup.addEventListener('mouseleave', () => { pt = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200); });
-          const cr = ci.getBoundingClientRect();
-          const wr = pageWrapper.getBoundingClientRect();
-          popup.style.left = (cr.left - wr.left) + 'px';
-          popup.style.top = (cr.bottom - wr.top + 2) + 'px';
-          pageWrapper.appendChild(popup);
-        });
-        ci.addEventListener('mouseleave', () => {
-          pt = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200);
-        });
-      }
     }
-    console.log('[cite] overlays created:', citeLayer.children.length, 'refsMap keys:', Object.keys(referencesMap).length);
+    console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
   }
 
   function setupCiteOverlay(el, refNum) {
