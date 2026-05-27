@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Reader</title>
+  <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="toolbar">
+      <button id="btn-open-folder" title="Open Folder">&#128193; Open Folder</button>
+      <button id="btn-toggle-sidebar" title="Toggle Sidebar">&#9776;</button>
+      <span id="current-pdf-name"></span>
+    </div>
+    <div id="panes">
+      <div id="left-pane" class="pane">
+        <div class="pane-header">Files <button id="btn-refresh" title="Refresh file tree">&#x21bb;</button></div>
+        <div id="file-tree"></div>
+      </div>
+      <div class="resize-handle" id="resize-left"></div>
+      <div id="middle-pane" class="pane">
+        <div id="pdf-controls">
+          <button id="btn-prev-page">&larr; Prev</button>
+          <span id="page-info">No PDF loaded</span>
+          <button id="btn-next-page">Next &rarr;</button>
+          <button id="btn-zoom-out">-</button>
+          <span id="zoom-level">100%</span>
+          <button id="btn-zoom-in">+</button>
+          <span class="zoom-hint">Ctrl+Scroll to zoom</span>
+        </div>
+        <div id="pdf-container">
+          <div id="pdf-placeholder">Select a PDF from the file explorer</div>
+          <div id="pdf-page-wrapper" style="display:none;">
+            <canvas id="pdf-canvas"></canvas>
+            <div id="text-layer" class="textLayer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="resize-handle" id="resize-right"></div>
+      <div id="right-pane" class="pane">
+        <div class="pane-header">
+          Chat
+          <button id="btn-settings" title="Settings">&#9881;</button>
+        </div>
+        <div id="settings-panel">
+          <label>API URL
+            <input id="setting-url" type="text" placeholder="http://localhost:8317/v1">
+          </label>
+          <label>API Key
+            <input id="setting-key" type="password" placeholder="API key">
+          </label>
+          <label>Model
+            <input id="setting-model" type="text" placeholder="claude-sonnet-4-6">
+          </label>
+        </div>
+        <div id="selected-text-bar" style="display:none;">
+          <span id="selected-text-content"></span>
+          <span class="selected-suffix">is selected.</span>
+        </div>
+        <div id="chat-messages"></div>
+        <div id="stamp-view" style="display:none;">
+          <div id="stamp-view-header">
+            <button id="btn-back-to-chat">&larr; Back</button>
+            <button id="btn-delete-stamp">Delete</button>
+          </div>
+          <div id="stamp-view-content"></div>
+        </div>
+        <div id="chat-input-area">
+          <div id="chat-action-row">
+            <button id="btn-define" title="Define highlighted word">Define</button>
+            <button id="btn-location" title="Look up location">Location</button>
+            <button id="btn-person" title="Look up person">Person</button>
+            <button id="btn-cite" title="Look up citation">Cite</button>
+            <button id="btn-stamp" title="Pin last AI message to PDF selection">Stamp</button>
+            <button id="btn-tree" title="Chat history tree">Tree</button>
+            <button id="btn-new-chat" title="Start new conversation">New Chat</button>
+          </div>
+          <textarea id="chat-input" placeholder="Ask about the PDF..." rows="3"></textarea>
+          <div id="chat-bottom-row">
+            <button id="btn-send">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="tree-modal" style="display:none;">
+    <div id="tree-modal-content">
+      <div id="tree-modal-header">
+        <span>Chat History Tree</span>
+        <button id="btn-close-tree">&times;</button>
+      </div>
+      <div id="tree-view"></div>
+    </div>
+  </div>
+  <script type="module" src="src/app.js?v=4"></script>
+</body>
+</html>

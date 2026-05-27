@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/AdrianRaFo/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "PDF Reader",
+  "version": "0.1.0",
+  "identifier": "com.pdfr.app",
+  "build": {
+    "frontendDist": "../"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "PDF Reader",
+        "width": 1400,
+        "height": 900,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:"
+    }
+  }
+}
