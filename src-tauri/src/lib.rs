@@ -54,6 +54,8 @@ pub fn run() {
             commands::storage::load_chat_tree,
             commands::storage::save_stamps,
             commands::storage::load_stamps,
+            commands::storage::save_citations,
+            commands::storage::load_citations,
             commands::storage::save_session,
             commands::storage::load_session,
             commands::lookup::open_url,

@@ -454,52 +454,84 @@ export function initPdfViewer() {
   let xmlIdToIndex = {};
   let authorYearLookup = {};
 
+  function applyCitationData(result) {
+    citationStyle = result.style || null;
+    grobidRefs = result.references || [];
+    grobidCitations = result.citations || [];
+
+    referencesMap = {};
+    xmlIdToIndex = {};
+    for (const ref_ of grobidRefs) {
+      referencesMap[ref_.index] = {
+        fullText: `${ref_.firstAuthor} et al. ${ref_.title}. ${ref_.venue} (${ref_.year})`,
+        title: ref_.title,
+        venue: ref_.venue || '',
+        year: ref_.year || '',
+        month: '',
+        firstAuthor: ref_.firstAuthor || '',
+      };
+      if (ref_.xmlId) xmlIdToIndex[ref_.xmlId] = ref_.index;
+    }
+
+    authorYearLookup = {};
+    for (const cite of grobidCitations) {
+      if (!cite.target) continue;
+      const refIndex = xmlIdToIndex[cite.target];
+      if (!refIndex) continue;
+      const m = cite.text.match(/([A-Z][a-z]+).*?((?:19|20)\d{2}[a-z]?)/);
+      if (m) {
+        const key = m[1] + '_' + m[2];
+        authorYearLookup[key] = refIndex;
+        const baseKey = m[1] + '_' + m[2].replace(/[a-z]$/, '');
+        if (!authorYearLookup[baseKey]) authorYearLookup[baseKey] = refIndex;
+      }
+    }
+
+    refsRawText = grobidRefs.map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
+    console.log('[grobid] style:', citationStyle, 'refs:', Object.keys(referencesMap).length, 'authorYearLookup:', Object.keys(authorYearLookup).length);
+    renderPage();
+  }
+
   async function loadGrobidRefs(pdfPath) {
     try {
+      // Try loading cached citation data first
+      const cached = await invoke('load_citations', { pdfPath });
+      if (cached) {
+        console.log('[grobid] Loading cached citations for:', pdfPath);
+        applyCitationData(JSON.parse(cached));
+        return;
+      }
+
       console.log('[grobid] Parsing references for:', pdfPath);
       const result = await invoke('parse_references_grobid', { pdfPath });
-      citationStyle = result.style || null;
-      grobidRefs = result.references || [];
-      grobidCitations = result.citations || [];
-      console.log('[grobid] style:', citationStyle, 'refs:', grobidRefs.length, 'citations:', grobidCitations.length);
+      applyCitationData(result);
 
-      referencesMap = {};
-      xmlIdToIndex = {};
-      for (const ref_ of grobidRefs) {
-        referencesMap[ref_.index] = {
-          fullText: `${ref_.firstAuthor} et al. ${ref_.title}. ${ref_.venue} (${ref_.year})`,
-          title: ref_.title,
-          venue: ref_.venue || '',
-          year: ref_.year || '',
-          month: '',
-          firstAuthor: ref_.firstAuthor || '',
-        };
-        if (ref_.xmlId) xmlIdToIndex[ref_.xmlId] = ref_.index;
+      // Cache the result
+      try {
+        await invoke('save_citations', { pdfPath, data: JSON.stringify(result) });
+      } catch (e) {
+        console.warn('[grobid] Failed to cache citations:', e);
       }
-
-      // Build author+year lookup from GROBID inline citations
-      authorYearLookup = {};
-      for (const cite of grobidCitations) {
-        if (!cite.target) continue;
-        const refIndex = xmlIdToIndex[cite.target];
-        if (!refIndex) continue;
-        const m = cite.text.match(/([A-Z][a-z]+).*?((?:19|20)\d{2}[a-z]?)/);
-        if (m) {
-          const key = m[1] + '_' + m[2];
-          authorYearLookup[key] = refIndex;
-          const baseKey = m[1] + '_' + m[2].replace(/[a-z]$/, '');
-          if (!authorYearLookup[baseKey]) authorYearLookup[baseKey] = refIndex;
-        }
-      }
-
-      refsRawText = grobidRefs.map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
-
-      console.log('[grobid] referencesMap:', Object.keys(referencesMap).length, 'authorYearLookup:', Object.keys(authorYearLookup).length);
-      renderPage();
     } catch (e) {
       console.warn('[grobid] Failed, falling back to regex parsing:', e);
     }
   }
+
+  async function refreshCitations() {
+    if (!currentPdfPath) return;
+    console.log('[grobid] Refreshing citations for:', currentPdfPath);
+    const result = await invoke('parse_references_grobid', { pdfPath: currentPdfPath });
+    applyCitationData(result);
+    try {
+      await invoke('save_citations', { pdfPath: currentPdfPath, data: JSON.stringify(result) });
+    } catch (e) {
+      console.warn('[grobid] Failed to cache citations:', e);
+    }
+  }
+
+  document.getElementById('btn-refresh-citations').addEventListener('click', () => {
+    refreshCitations().catch(e => console.error('[grobid] Refresh failed:', e));
+  });
 
   function parseReference(refText) {
     const yearMatch = refText.match(/\b((?:19|20)\d{2})[a-z]?\b/);
