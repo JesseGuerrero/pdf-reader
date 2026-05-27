@@ -445,8 +445,7 @@ export function initPdfViewer() {
       console.log('[refs] "References" found at char:', idx);
       if (idx >= 0) console.log('[refs] text around it:', JSON.stringify(pdfText.slice(idx, idx + 200)));
     }
-    // Re-render citation overlays now that refs are available
-    makeCitationsClickable();
+    // GROBID loadGrobidRefs will call makeCitationsClickable() when ready
   }
 
   let grobidRefs = [];
