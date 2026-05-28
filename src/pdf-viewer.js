@@ -828,9 +828,9 @@ export function initPdfViewer() {
         }
       }
 
-      // Fallback: for any pages (or portions) without split-bracket spans,
-      // match [N] directly in spans. Deduplicate with already-placed overlays.
-      if (citeLayer.children.length < refMatches.length) {
+      // Fallback: only for single-layer pages (no split-bracket spans).
+      // On dual-layer pages, the two-phase approach already handled everything.
+      if (bracketPositions.length === 0 && refMatches.length > 0) {
         const placedRefs = new Set();
         for (const el of citeLayer.children) {
           placedRefs.add(el.dataset.ref + '@' + Math.round(parseFloat(el.style.top)));
