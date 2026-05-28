@@ -828,7 +828,7 @@ export function initPdfViewer() {
       // only, with no spaces around brackets so cross-font [N] concatenates).
       // Create overlay divs positioned via range rects.
       const pad = 2;
-      const bracketRe = /\[(\d+(?:[,–—-]+\d+)*)\]/g;
+      const bracketRe = /\[(\d+(?:[,\s–—-]+\d+)*)\]/g;
       let bm;
       while ((bm = bracketRe.exec(fullText)) !== null) {
         const nums = [];
