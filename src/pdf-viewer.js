@@ -924,7 +924,7 @@ export function initPdfViewer() {
       if (onCitationChat) {
         const lines = refs.map(n => {
           const d = refDisplay(n);
-          return `**[${n}]** ${d.disp}\n\n[Google Scholar ↗](${d.url})`;
+          return `**${d.disp}**\n\n[Google Scholar ↗](${d.url})`;
         });
         const md = lines.join('\n\n---\n\n');
         const firstUrl = refDisplay(refs[0]).url;

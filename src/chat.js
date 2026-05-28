@@ -506,8 +506,7 @@ export function initChat(pdfViewer) {
 
   pdfViewer.setOnCitationChat((refNum, displayTitle, googleUrl) => {
     if (!currentTree) return;
-    const md = `**[${refNum}]** ${displayTitle}\n\n[Google Scholar ↗](${googleUrl})`;
-    currentTree.addMessage('assistant', md);
+    currentTree.addMessage('assistant', displayTitle + '\n\n[Google Scholar ↗](' + googleUrl + ')');
     renderMessages();
     saveCurrentTree();
   });
