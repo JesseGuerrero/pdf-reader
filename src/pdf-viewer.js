@@ -757,21 +757,24 @@ export function initPdfViewer() {
       // Match by line order.
       const pad = 2;
 
-      // Phase 1: collect ref numbers from [N] matches, ordered by position
+      // Phase 1: find [N] in concatenated fullText (handles digits split
+      // across spans in different fonts) and record positions + ref numbers
       const refMatches = [];
-      for (const span of spans) {
-        const text = span.textContent;
-        for (const m of text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)) {
-          const nums = [];
-          for (const part of m[1].split(/[,\s]+/)) {
-            const rm = part.match(/^(\d+)[–—-](\d+)$/);
-            if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
-            else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
-          }
-          const valid = nums.filter(n => referencesMap[n]);
-          if (valid.length > 0) {
-            refMatches.push({ nums: valid, top: span.offsetTop, text: m[0] });
-          }
+      const bracketRe = /\[(\d+(?:[,\s–—-]+\d+)*)\]/g;
+      let bm;
+      while ((bm = bracketRe.exec(fullText)) !== null) {
+        const nums = [];
+        for (const part of bm[1].split(/[,\s]+/)) {
+          const rm = part.match(/^(\d+)[–—-](\d+)$/);
+          if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
+          else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
+        }
+        const valid = nums.filter(n => referencesMap[n]);
+        if (valid.length > 0) {
+          // Find which segment this match starts in to get offsetTop
+          const seg = fullSegments.find(s => bm.index >= s.start && bm.index < s.start + s.len);
+          const top = seg ? seg.span.offsetTop : 0;
+          refMatches.push({ nums: valid, top, text: bm[0], ftStart: bm.index, ftEnd: bm.index + bm[0].length });
         }
       }
 
@@ -835,28 +838,27 @@ export function initPdfViewer() {
       for (const el of citeLayer.children) placedNums.add(el.dataset.ref);
 
       for (const rm of refMatches) {
-        if (placedNums.has(String(rm.nums[0]))) continue;
+        if (placedNums.has(rm.nums[0] + '@' + rm.ftStart)) continue;
 
-        // Find the shortest span containing this [N] at this line
-        let bestSpan = null, bestLen = Infinity;
-        for (const span of spans) {
-          if (Math.abs(span.offsetTop - rm.top) > 2) continue;
-          if (!span.textContent.includes(rm.text)) continue;
-          if (span.textContent.length < bestLen) {
-            bestLen = span.textContent.length;
-            bestSpan = span;
+        // Create range across fullSegments for this match
+        const range = document.createRange();
+        let ok = false;
+        for (const seg of fullSegments) {
+          const segEnd = seg.start + seg.len;
+          if (!ok && rm.ftStart >= seg.start && rm.ftStart < segEnd) {
+            const node = seg.span.firstChild || seg.span;
+            try { range.setStart(node, rm.ftStart - seg.start); ok = true; } catch(e) { break; }
+          }
+          if (ok && rm.ftEnd <= segEnd) {
+            const node = seg.span.firstChild || seg.span;
+            try { range.setEnd(node, rm.ftEnd - seg.start); } catch(e) { ok = false; }
+            break;
           }
         }
-        if (!bestSpan) continue;
-        const node = bestSpan.firstChild;
-        if (!node || node.nodeType !== 3) continue;
-        const idx = bestSpan.textContent.indexOf(rm.text);
-        if (idx < 0) continue;
-        try {
-          const range = document.createRange();
-          range.setStart(node, idx);
-          range.setEnd(node, idx + rm.text.length);
-          const rect = range.getBoundingClientRect();
+        if (!ok) continue;
+
+        const rects = range.getClientRects();
+        for (const rect of rects) {
           if (rect.width < 2 || rect.height < 2) continue;
           const el = document.createElement('div');
           el.className = 'cite-overlay';
@@ -868,8 +870,8 @@ export function initPdfViewer() {
           el.style.height = (rect.height + pad * 2) + 'px';
           setupCiteOverlay(el, rm.nums[0]);
           citeLayer.appendChild(el);
-          placedNums.add(String(rm.nums[0]));
-        } catch (e) {}
+        }
+        placedNums.add(rm.nums[0] + '@' + rm.ftStart);
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
