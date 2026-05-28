@@ -752,13 +752,15 @@ export function initPdfViewer() {
       }
     } else {
       // Bracket citations: match [N] per-span. Some PDFs have duplicate
-      // text layers — the invisible layer contains complete [N] at wrong
-      // positions. Filter: only keep overlays within the visible page area.
+      // text layers — the invisible layer has complete [N] but at wrong
+      // positions. Filter using span.offsetTop (scroll-independent) to
+      // skip spans positioned outside the visible page area.
       const pageH = parseFloat(canvas.style.height) || canvas.clientHeight;
-      const pageW = parseFloat(canvas.style.width) || canvas.clientWidth;
       const pad = 2;
 
       for (const span of spans) {
+        if (span.offsetTop < -5 || span.offsetTop > pageH + 5) continue;
+
         const text = span.textContent;
         const matches = [...text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)];
         if (matches.length === 0) continue;
@@ -783,16 +785,12 @@ export function initPdfViewer() {
 
           for (const rect of range.getClientRects()) {
             if (rect.width < 2 || rect.height < 2) continue;
-            const relTop = rect.top - wrapperRect.top;
-            const relLeft = rect.left - wrapperRect.left;
-            if (relTop < -5 || relTop > pageH + 5) continue;
-            if (relLeft < -5 || relLeft > pageW + 5) continue;
             const el = document.createElement('div');
             el.className = 'cite-overlay';
             el.dataset.ref = String(valid[0]);
             el.dataset.refs = valid.join(',');
-            el.style.left = (relLeft - pad) + 'px';
-            el.style.top = (relTop - pad) + 'px';
+            el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
+            el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
             el.style.width = (rect.width + pad * 2) + 'px';
             el.style.height = (rect.height + pad * 2) + 'px';
             setupCiteOverlay(el, valid[0]);
