@@ -488,6 +488,14 @@ export function initPdfViewer() {
       }
     }
 
+    // Also populate lookup from bibliography entries directly (catches refs
+    // that GROBID couldn't resolve from inline citations)
+    for (const ref_ of grobidRefs) {
+      if (!ref_.firstAuthor || !ref_.year) continue;
+      const key = ref_.firstAuthor + '_' + ref_.year;
+      if (!authorYearLookup[key]) authorYearLookup[key] = ref_.index;
+    }
+
     refsRawText = grobidRefs.map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
     console.log('[grobid] style:', citationStyle, 'refs:', Object.keys(referencesMap).length, 'authorYearLookup:', Object.keys(authorYearLookup).length);
     renderPage();
