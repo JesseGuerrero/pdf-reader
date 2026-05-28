@@ -757,9 +757,11 @@ export function initPdfViewer() {
       fullText += text;
     }
 
-    if (citationStyle === 'parenthetical') {
-      // Parenthetical citations: (Author et al., Year) mapped via GROBID
-      const parenRe = /\(([^)]{5,300})\)/g;
+    if (citationStyle === 'parenthetical' || citationStyle === 'bracket-author') {
+      // Author-year citations: (Author et al., Year) or [Author et al., Year]
+      const parenRe = citationStyle === 'bracket-author'
+        ? /\[([^\]]{5,300})\]/g
+        : /\(([^)]{5,300})\)/g;
       let pm;
       while ((pm = parenRe.exec(fullText)) !== null) {
         const inner = pm[1];

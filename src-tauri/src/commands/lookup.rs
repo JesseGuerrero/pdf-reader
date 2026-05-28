@@ -174,17 +174,28 @@ pub async fn parse_references_grobid(pdf_path: String) -> Result<Value, String> 
         }
     }
 
-    // Binary classification: bracket [N] vs parenthetical (Author, Year)
-    let has_brackets = citations
+    // Ternary classification: bracket [N], bracket-author [Author, Year], or parenthetical (Author, Year)
+    let resolved: Vec<&str> = citations
         .iter()
         .filter(|c| !c["target"].as_str().unwrap_or("").is_empty())
         .take(10)
-        .any(|c| {
-            c["text"]
-                .as_str()
-                .map_or(false, |t| t.contains('[') && t.chars().any(|ch| ch.is_ascii_digit()))
-        });
-    let style = if has_brackets { "bracket" } else { "parenthetical" };
+        .filter_map(|c| c["text"].as_str())
+        .collect();
+
+    let has_bracket_num = resolved.iter().any(|t| {
+        t.contains('[') && t.chars().any(|ch| ch.is_ascii_digit()) && !t.chars().any(|ch| ch.is_alphabetic())
+    });
+    let has_bracket_author = resolved.iter().any(|t| {
+        t.contains('[') && t.chars().any(|ch| ch.is_alphabetic()) && t.chars().any(|ch| ch.is_ascii_digit())
+    });
+
+    let style = if has_bracket_num {
+        "bracket"
+    } else if has_bracket_author {
+        "bracket-author"
+    } else {
+        "parenthetical"
+    };
 
     Ok(serde_json::json!({
         "style": style,
