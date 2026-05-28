@@ -492,21 +492,24 @@ export function initPdfViewer() {
     renderPage();
   }
 
+  const citeBtnEl = document.getElementById('btn-refresh-citations');
+
+  function setCiteLoading(loading) {
+    citeBtnEl.classList.toggle('loading', loading);
+    citeBtnEl.disabled = loading;
+  }
+
   async function loadGrobidRefs(pdfPath) {
     try {
-      // Try loading cached citation data first
       const cached = await invoke('load_citations', { pdfPath });
       if (cached) {
-        console.log('[grobid] Loading cached citations for:', pdfPath);
         applyCitationData(JSON.parse(cached));
         return;
       }
 
-      console.log('[grobid] Parsing references for:', pdfPath);
+      setCiteLoading(true);
       const result = await invoke('parse_references_grobid', { pdfPath });
       applyCitationData(result);
-
-      // Cache the result
       try {
         await invoke('save_citations', { pdfPath, data: JSON.stringify(result) });
       } catch (e) {
@@ -514,24 +517,26 @@ export function initPdfViewer() {
       }
     } catch (e) {
       console.warn('[grobid] Failed, falling back to regex parsing:', e);
+    } finally {
+      setCiteLoading(false);
     }
   }
 
   async function refreshCitations() {
     if (!currentPdfPath) return;
-    console.log('[grobid] Refreshing citations for:', currentPdfPath);
-    const result = await invoke('parse_references_grobid', { pdfPath: currentPdfPath });
-    applyCitationData(result);
+    setCiteLoading(true);
     try {
+      const result = await invoke('parse_references_grobid', { pdfPath: currentPdfPath });
+      applyCitationData(result);
       await invoke('save_citations', { pdfPath: currentPdfPath, data: JSON.stringify(result) });
     } catch (e) {
-      console.warn('[grobid] Failed to cache citations:', e);
+      console.error('[grobid] Refresh failed:', e);
+    } finally {
+      setCiteLoading(false);
     }
   }
 
-  document.getElementById('btn-refresh-citations').addEventListener('click', () => {
-    refreshCitations().catch(e => console.error('[grobid] Refresh failed:', e));
-  });
+  citeBtnEl.addEventListener('click', () => refreshCitations());
 
   function parseReference(refText) {
     const yearMatch = refText.match(/\b((?:19|20)\d{2})[a-z]?\b/);

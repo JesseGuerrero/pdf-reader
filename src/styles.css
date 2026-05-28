@@ -229,6 +229,28 @@ body {
   background: #45475a;
 }
 
+#btn-refresh-citations.loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+#btn-refresh-citations.loading::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #6c7086;
+  border-top-color: #cdd6f4;
+  border-radius: 50%;
+  animation: cite-spin 0.6s linear infinite;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+@keyframes cite-spin {
+  to { transform: rotate(360deg); }
+}
+
 #page-info {
   font-size: 13px;
   color: #a6adc8;
@@ -300,15 +322,15 @@ body {
   pointer-events: auto;
   cursor: pointer !important;
   border-radius: 2px;
-  background: rgba(255, 255, 0, 0.1);
+  background: rgba(0, 200, 0, 0.4);
 }
 
 .cite-overlay:hover {
-  background: rgba(255, 255, 0, 0.35);
+  background: rgba(0, 200, 0, 0.6);
 }
 
 .textLayer .cite-inline {
-  background: rgba(255, 255, 0, 0.2);
+  background: rgba(0, 200, 0, 0.4);
   cursor: pointer !important;
   pointer-events: auto !important;
   border-radius: 2px;
@@ -316,7 +338,7 @@ body {
 }
 
 .textLayer .cite-inline:hover {
-  background: rgba(255, 255, 0, 0.45);
+  background: rgba(0, 200, 0, 0.6);
 }
 
 .cite-popup {
