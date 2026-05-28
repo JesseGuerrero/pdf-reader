@@ -830,7 +830,7 @@ export function initPdfViewer() {
         const valid = nums.filter(n => referencesMap[n]);
         if (valid.length === 0) continue;
 
-        const mStart = bm.index, mEnd = mStart + bm[0].length;
+        const mStart = bm.index + 1, mEnd = bm.index + bm[0].length - 1;
         const range = document.createRange();
         let ok = false;
         for (const seg of fullSegments) {
