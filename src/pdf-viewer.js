@@ -662,10 +662,14 @@ export function initPdfViewer() {
     const spans = Array.from(textLayerDiv.querySelectorAll('span'));
 
     // Build full text from spans for range-based matching
+    // Filter out invisible/duplicate text layer spans (zero-width or outside viewport)
     let fullText = '';
     const fullSegments = [];
     for (let si = 0; si < spans.length; si++) {
-      const text = spans[si].textContent;
+      const span = spans[si];
+      const rect = span.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) continue;
+      const text = span.textContent;
       if (si > 0 && fullText.length > 0) {
         const lastChar = fullText[fullText.length - 1];
         const firstChar = text[0];
@@ -673,7 +677,7 @@ export function initPdfViewer() {
           fullText += ' ';
         }
       }
-      fullSegments.push({ span: spans[si], start: fullText.length, len: text.length });
+      fullSegments.push({ span, start: fullText.length, len: text.length });
       fullText += text;
     }
 
@@ -772,19 +776,27 @@ export function initPdfViewer() {
 
         const clientRects = range.getClientRects();
         if (clientRects.length === 0) continue;
-        // Use the last rect (in case of duplicate layers, it's the visible one)
-        const rect = clientRects[clientRects.length - 1];
-        if (rect.width < 2) continue;
+        // Deduplicate: some PDFs have overlapping text layers producing
+        // multiple rects for the same [N]. Group by vertical position and
+        // only keep one per location.
+        const seen = new Set();
         const pad = 2;
-        const el = document.createElement('div');
-        el.className = 'cite-overlay';
-        el.dataset.ref = String(num);
-        el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
-        el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
-        el.style.width = (rect.width + pad * 2) + 'px';
-        el.style.height = (rect.height + pad * 2) + 'px';
-        setupCiteOverlay(el, num);
-        citeLayer.appendChild(el);
+        for (let ri = 0; ri < clientRects.length; ri++) {
+          const rect = clientRects[ri];
+          if (rect.width < 2 || rect.height < 2) continue;
+          const key = Math.round(rect.top) + ',' + Math.round(rect.left);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const el = document.createElement('div');
+          el.className = 'cite-overlay';
+          el.dataset.ref = String(num);
+          el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
+          el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
+          el.style.width = (rect.width + pad * 2) + 'px';
+          el.style.height = (rect.height + pad * 2) + 'px';
+          setupCiteOverlay(el, num);
+          citeLayer.appendChild(el);
+        }
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
