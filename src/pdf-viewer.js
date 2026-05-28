@@ -756,23 +756,39 @@ export function initPdfViewer() {
       // across spans, so only visible-layer spans match.
       for (const span of spans) {
         const text = span.textContent;
-        const allMatches = [...text.matchAll(/\[(\d{1,4})\]/g)];
-        const valid = allMatches.filter(m => referencesMap[parseInt(m[1])]);
-        if (valid.length === 0) continue;
+        const allMatches = [...text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)];
+        if (allMatches.length === 0) continue;
+        // Extract all ref numbers from each match (handles [4], [8,9], [19-21], [12-14,25-27])
+        const validMatches = [];
+        for (const m of allMatches) {
+          const nums = [];
+          for (const part of m[1].split(/[,\s]+/)) {
+            const rangeMatch = part.match(/^(\d+)[–—-](\d+)$/);
+            if (rangeMatch) {
+              const lo = parseInt(rangeMatch[1]), hi = parseInt(rangeMatch[2]);
+              for (let n = lo; n <= hi; n++) nums.push(n);
+            } else {
+              const n = parseInt(part);
+              if (!isNaN(n)) nums.push(n);
+            }
+          }
+          const validNums = nums.filter(n => referencesMap[n]);
+          if (validNums.length > 0) validMatches.push({ m, nums: validNums });
+        }
+        if (validMatches.length === 0) continue;
 
         let html = '';
         let last = 0;
         const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        for (const m of valid) {
-          const num = parseInt(m[1]);
+        for (const { m, nums } of validMatches) {
           html += esc(text.slice(last, m.index));
-          html += '<span class="cite-overlay" data-ref="' + num + '" style="position:relative;display:inline;pointer-events:auto;cursor:pointer;">' + esc(m[0]) + '</span>';
+          html += '<span class="cite-bracket" data-ref="' + nums[0] + '" data-refs="' + nums.join(',') + '">' + esc(m[0]) + '</span>';
           last = m.index + m[0].length;
         }
         html += esc(text.slice(last));
         span.innerHTML = html;
 
-        for (const ci of span.querySelectorAll('.cite-overlay')) {
+        for (const ci of span.querySelectorAll('.cite-bracket')) {
           setupCiteOverlay(ci, parseInt(ci.dataset.ref));
         }
       }

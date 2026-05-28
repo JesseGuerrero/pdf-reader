@@ -329,6 +329,17 @@ body {
   background: rgba(0, 200, 0, 0.6);
 }
 
+.textLayer .cite-bracket {
+  background: rgba(0, 200, 0, 0.4);
+  border-radius: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.textLayer .cite-bracket:hover {
+  background: rgba(0, 200, 0, 0.6);
+}
+
 .textLayer .cite-inline {
   background: rgba(0, 200, 0, 0.4);
   cursor: pointer !important;
