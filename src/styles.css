@@ -384,9 +384,17 @@ body {
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 11px;
-  max-width: 320px;
+  max-width: 360px;
+  max-height: 300px;
+  overflow-y: auto;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
   pointer-events: auto;
+}
+
+.cite-popup-row + .cite-popup-row {
+  border-top: 1px solid #313244;
+  margin-top: 6px;
+  padding-top: 6px;
 }
 
 .cite-popup-title {

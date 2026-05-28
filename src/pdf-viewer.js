@@ -866,15 +866,17 @@ export function initPdfViewer() {
   }
 
   function setupCiteOverlay(el, refNum) {
-    const ref = referencesMap[refNum];
-    if (!ref) return;
-    const title = ref.title;
-    const venue = ref.venue || '';
-    const year = ref.year || '';
-    const month = ref.month || '';
-    const venueTag = venue || year ? ` (${[venue, (month ? month + '-' : '') + year].filter(Boolean).join(', ')})` : '';
-    const displayTitle = title + venueTag;
-    const googleUrl = 'https://scholar.google.com/scholar?q=' + encodeURIComponent(title);
+    const refs = (el.dataset.refs || String(refNum)).split(',').map(Number).filter(n => referencesMap[n]);
+    if (refs.length === 0) return;
+
+    function refDisplay(n) {
+      const r = referencesMap[n];
+      if (!r) return { title: '', disp: '', url: '' };
+      const venue = r.venue || '';
+      const year = r.year || '';
+      const tag = venue || year ? ` (${[venue, year].filter(Boolean).join(', ')})` : '';
+      return { title: r.title, disp: r.title + tag, url: 'https://scholar.google.com/scholar?q=' + encodeURIComponent(r.title) };
+    }
 
     let popup = null;
     let popupTimeout = null;
@@ -884,7 +886,13 @@ export function initPdfViewer() {
       if (popup) return;
       popup = document.createElement('div');
       popup.className = 'cite-popup';
-      popup.innerHTML = `<div class="cite-popup-title">${displayTitle}</div><a class="cite-popup-link" href="${googleUrl}">Google Scholar ↗</a>`;
+      for (const n of refs) {
+        const d = refDisplay(n);
+        const row = document.createElement('div');
+        row.className = 'cite-popup-row';
+        row.innerHTML = `<div class="cite-popup-title">[${n}] ${d.disp}</div><a class="cite-popup-link" href="${d.url}">Google Scholar ↗</a>`;
+        popup.appendChild(row);
+      }
       popup.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
       popup.addEventListener('mouseenter', () => clearTimeout(popupTimeout));
       popup.addEventListener('mouseleave', () => { popupTimeout = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200); });
@@ -903,7 +911,15 @@ export function initPdfViewer() {
       e.stopPropagation();
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed) return;
-      if (onCitationChat) onCitationChat(refNum, displayTitle, googleUrl);
+      if (onCitationChat) {
+        const lines = refs.map(n => {
+          const d = refDisplay(n);
+          return `**[${n}]** ${d.disp}\n\n[Google Scholar ↗](${d.url})`;
+        });
+        const md = lines.join('\n\n---\n\n');
+        const firstUrl = refDisplay(refs[0]).url;
+        onCitationChat(refs[0], md, firstUrl);
+      }
     });
   }
 
