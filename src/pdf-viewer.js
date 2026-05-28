@@ -751,71 +751,53 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: some PDFs have duplicate text layers at different
-      // positions (e.g. 9.96px visible + 10.02px invisible). Use the most
-      // common font-size layer (visible one) and match [N] across its spans.
-      const fontCounts = {};
-      for (const span of spans) {
-        const fs = window.getComputedStyle(span).fontSize;
-        fontCounts[fs] = (fontCounts[fs] || 0) + 1;
-      }
-      const dominantFont = Object.entries(fontCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-
-      let bText = '';
-      const bSegs = [];
-      for (const span of spans) {
-        if (window.getComputedStyle(span).fontSize !== dominantFont) continue;
-        const text = span.textContent;
-        if (bText.length > 0) {
-          const last = bText[bText.length - 1];
-          const first = text[0];
-          if (last && first && last !== ' ' && first !== ' ') bText += ' ';
-        }
-        bSegs.push({ span, start: bText.length, len: text.length });
-        bText += text;
-      }
-
-      const bracketRe = /\[(\d+(?:[,\s–—-]+\d+)*)\]/g;
-      let bm;
+      // Bracket citations: match [N] per-span. Some PDFs have duplicate
+      // text layers — the invisible layer contains complete [N] at wrong
+      // positions. Filter: only keep overlays within the visible page area.
+      const pageH = parseFloat(canvas.style.height) || canvas.clientHeight;
+      const pageW = parseFloat(canvas.style.width) || canvas.clientWidth;
       const pad = 2;
-      while ((bm = bracketRe.exec(bText)) !== null) {
-        const nums = [];
-        for (const part of bm[1].split(/[,\s]+/)) {
-          const rm = part.match(/^(\d+)[–—-](\d+)$/);
-          if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
-          else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
-        }
-        const valid = nums.filter(n => referencesMap[n]);
-        if (valid.length === 0) continue;
 
-        const mStart = bm.index, mEnd = mStart + bm[0].length;
-        const range = document.createRange();
-        let ok = false;
-        for (const seg of bSegs) {
-          const segEnd = seg.start + seg.len;
-          if (!ok && mStart >= seg.start && mStart < segEnd) {
-            range.setStart(seg.span.firstChild || seg.span, mStart - seg.start);
-            ok = true;
-          }
-          if (ok && mEnd <= segEnd) {
-            range.setEnd(seg.span.firstChild || seg.span, mEnd - seg.start);
-            break;
-          }
-        }
-        if (!ok) continue;
+      for (const span of spans) {
+        const text = span.textContent;
+        const matches = [...text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)];
+        if (matches.length === 0) continue;
 
-        for (const rect of range.getClientRects()) {
-          if (rect.width < 2 || rect.height < 2) continue;
-          const el = document.createElement('div');
-          el.className = 'cite-overlay';
-          el.dataset.ref = String(valid[0]);
-          el.dataset.refs = valid.join(',');
-          el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
-          el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
-          el.style.width = (rect.width + pad * 2) + 'px';
-          el.style.height = (rect.height + pad * 2) + 'px';
-          setupCiteOverlay(el, valid[0]);
-          citeLayer.appendChild(el);
+        for (const m of matches) {
+          const nums = [];
+          for (const part of m[1].split(/[,\s]+/)) {
+            const rm = part.match(/^(\d+)[–—-](\d+)$/);
+            if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
+            else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
+          }
+          const valid = nums.filter(n => referencesMap[n]);
+          if (valid.length === 0) continue;
+
+          const node = span.firstChild;
+          if (!node || node.nodeType !== 3) continue;
+          const range = document.createRange();
+          try {
+            range.setStart(node, m.index);
+            range.setEnd(node, m.index + m[0].length);
+          } catch (e) { continue; }
+
+          for (const rect of range.getClientRects()) {
+            if (rect.width < 2 || rect.height < 2) continue;
+            const relTop = rect.top - wrapperRect.top;
+            const relLeft = rect.left - wrapperRect.left;
+            if (relTop < -5 || relTop > pageH + 5) continue;
+            if (relLeft < -5 || relLeft > pageW + 5) continue;
+            const el = document.createElement('div');
+            el.className = 'cite-overlay';
+            el.dataset.ref = String(valid[0]);
+            el.dataset.refs = valid.join(',');
+            el.style.left = (relLeft - pad) + 'px';
+            el.style.top = (relTop - pad) + 'px';
+            el.style.width = (rect.width + pad * 2) + 'px';
+            el.style.height = (rect.height + pad * 2) + 'px';
+            setupCiteOverlay(el, valid[0]);
+            citeLayer.appendChild(el);
+          }
         }
       }
     }
