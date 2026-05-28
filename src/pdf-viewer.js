@@ -751,21 +751,17 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: match [N] per-span. Some PDFs have duplicate
-      // text layers — the invisible layer has complete [N] but at wrong
-      // positions. Filter using span.offsetTop (scroll-independent) to
-      // skip spans positioned outside the visible page area.
-      const pageH = parseFloat(canvas.style.height) || canvas.clientHeight;
+      // Bracket citations: two-phase approach for PDFs with dual text layers.
+      // Phase 1: get ref numbers from spans with complete [N] (any layer).
+      // Phase 2: get positions from spans ending with [ (visible/link layer).
+      // Match by line order.
       const pad = 2;
 
+      // Phase 1: collect ref numbers from [N] matches, ordered by position
+      const refMatches = [];
       for (const span of spans) {
-        if (span.offsetTop < -5 || span.offsetTop > pageH + 5) continue;
-
         const text = span.textContent;
-        const matches = [...text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)];
-        if (matches.length === 0) continue;
-
-        for (const m of matches) {
+        for (const m of text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)) {
           const nums = [];
           for (const part of m[1].split(/[,\s]+/)) {
             const rm = part.match(/^(\d+)[–—-](\d+)$/);
@@ -773,30 +769,63 @@ export function initPdfViewer() {
             else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
           }
           const valid = nums.filter(n => referencesMap[n]);
-          if (valid.length === 0) continue;
-
-          const node = span.firstChild;
-          if (!node || node.nodeType !== 3) continue;
-          const range = document.createRange();
-          try {
-            range.setStart(node, m.index);
-            range.setEnd(node, m.index + m[0].length);
-          } catch (e) { continue; }
-
-          for (const rect of range.getClientRects()) {
-            if (rect.width < 2 || rect.height < 2) continue;
-            const el = document.createElement('div');
-            el.className = 'cite-overlay';
-            el.dataset.ref = String(valid[0]);
-            el.dataset.refs = valid.join(',');
-            el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
-            el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
-            el.style.width = (rect.width + pad * 2) + 'px';
-            el.style.height = (rect.height + pad * 2) + 'px';
-            setupCiteOverlay(el, valid[0]);
-            citeLayer.appendChild(el);
+          if (valid.length > 0) {
+            refMatches.push({ nums: valid, top: span.offsetTop, text: m[0] });
           }
         }
+      }
+
+      // Phase 2: find [ positions from visible-layer spans (end with [)
+      const bracketPositions = [];
+      for (const span of spans) {
+        const text = span.textContent;
+        const idx = text.lastIndexOf('[');
+        if (idx < 0 || idx < text.length - 3) continue;
+        const node = span.firstChild;
+        if (!node || node.nodeType !== 3) continue;
+        try {
+          const range = document.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, text.length);
+          const rect = range.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            bracketPositions.push({ rect, top: span.offsetTop });
+          }
+        } catch (e) {}
+      }
+
+      // Phase 3: match ref numbers to bracket positions by line order.
+      // Deduplicate refMatches by top (dual layers produce duplicates).
+      const seenTops = new Map();
+      const uniqueRefs = [];
+      for (const rm of refMatches) {
+        const key = Math.round(rm.top / 10);
+        if (seenTops.has(key)) continue;
+        seenTops.set(key, true);
+        uniqueRefs.push(rm);
+      }
+
+      // Sort both by vertical position
+      uniqueRefs.sort((a, b) => a.top - b.top);
+      bracketPositions.sort((a, b) => a.top - b.top);
+
+      // Match 1:1
+      const count = Math.min(uniqueRefs.length, bracketPositions.length);
+      for (let i = 0; i < count; i++) {
+        const ref = uniqueRefs[i];
+        const pos = bracketPositions[i];
+        const charW = pos.rect.width;
+        const estWidth = charW * (ref.text.length + 0.5);
+        const el = document.createElement('div');
+        el.className = 'cite-overlay';
+        el.dataset.ref = String(ref.nums[0]);
+        el.dataset.refs = ref.nums.join(',');
+        el.style.left = (pos.rect.left - wrapperRect.left - pad) + 'px';
+        el.style.top = (pos.rect.top - wrapperRect.top - pad) + 'px';
+        el.style.width = (estWidth + pad * 2) + 'px';
+        el.style.height = (pos.rect.height + pad * 2) + 'px';
+        setupCiteOverlay(el, ref.nums[0]);
+        citeLayer.appendChild(el);
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
