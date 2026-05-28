@@ -746,43 +746,24 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: [N] — use overlay approach (same as parenthetical)
-      // to handle PDFs with duplicate text layers
-      const bracketRe = /\[(\d{1,4})\]/g;
-      let bm;
-      while ((bm = bracketRe.exec(fullText)) !== null) {
-        const num = parseInt(bm[1]);
-        if (!referencesMap[num]) continue;
-
-        const matchStart = bm.index;
-        const matchEnd = matchStart + bm[0].length;
-
-        const range = document.createRange();
-        let rangeStartSet = false;
-        for (const seg of fullSegments) {
-          const segEnd = seg.start + seg.len;
-          if (!rangeStartSet && matchStart >= seg.start && matchStart < segEnd) {
-            const node = seg.span.firstChild || seg.span;
-            range.setStart(node, matchStart - seg.start);
-            rangeStartSet = true;
-          }
-          if (rangeStartSet && matchEnd <= segEnd) {
-            const node = seg.span.firstChild || seg.span;
-            range.setEnd(node, matchEnd - seg.start);
-            break;
-          }
-        }
-        if (!rangeStartSet) continue;
-
-        const clientRects = range.getClientRects();
-        if (clientRects.length === 0) continue;
-        // Deduplicate: some PDFs have overlapping text layers producing
-        // multiple rects for the same [N]. Group by vertical position and
-        // only keep one per location.
-        const seen = new Set();
-        const pad = 2;
-        for (let ri = 0; ri < clientRects.length; ri++) {
-          const rect = clientRects[ri];
+      // Bracket citations: match [N] within individual spans to avoid
+      // cross-layer range issues from PDFs with duplicate text layers.
+      // The invisible link layer splits [ and ] across spans, so only
+      // visible-layer spans contain a complete [N] match.
+      const seen = new Set();
+      const pad = 2;
+      for (const span of spans) {
+        const text = span.textContent;
+        if (!/\[\d/.test(text)) continue;
+        const node = span.firstChild;
+        if (!node || node.nodeType !== 3) continue;
+        for (const m of text.matchAll(/\[(\d{1,4})\]/g)) {
+          const num = parseInt(m[1]);
+          if (!referencesMap[num]) continue;
+          const range = document.createRange();
+          range.setStart(node, m.index);
+          range.setEnd(node, m.index + m[0].length);
+          const rect = range.getBoundingClientRect();
           if (rect.width < 2 || rect.height < 2) continue;
           const key = Math.round(rect.top) + ',' + Math.round(rect.left);
           if (seen.has(key)) continue;
