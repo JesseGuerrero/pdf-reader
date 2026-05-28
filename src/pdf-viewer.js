@@ -666,45 +666,20 @@ export function initPdfViewer() {
     const wrapperRect = textLayerDiv.getBoundingClientRect();
     const spans = Array.from(textLayerDiv.querySelectorAll('span'));
 
-    // Build full text from spans for range-based matching.
-    // Some PDFs have an invisible accessibility layer with long full-line
-    // spans at wrong positions. Detect and exclude it by finding the font
-    // with the longest average span length.
-    const fontStats = {};
-    for (const span of spans) {
-      const r = span.getBoundingClientRect();
-      if (r.width < 1 || r.height < 1) continue;
-      const fs = window.getComputedStyle(span).fontSize;
-      if (!fontStats[fs]) fontStats[fs] = { count: 0, totalLen: 0 };
-      fontStats[fs].count++;
-      fontStats[fs].totalLen += span.textContent.length;
-    }
-    let excludeFont = null;
-    const fonts = Object.entries(fontStats);
-    if (fonts.length > 1) {
-      fonts.sort((a, b) => (b[1].totalLen / b[1].count) - (a[1].totalLen / a[1].count));
-      const longest = fonts[0], second = fonts[1];
-      const avgLongest = longest[1].totalLen / longest[1].count;
-      const avgSecond = second[1].totalLen / second[1].count;
-      if (avgLongest > avgSecond * 2) excludeFont = longest[0];
-    }
-
+    // Build full text from spans for range-based matching
     let fullText = '';
     const fullSegments = [];
     for (let si = 0; si < spans.length; si++) {
       const span = spans[si];
       const r = span.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) continue;
-      if (excludeFont && window.getComputedStyle(span).fontSize === excludeFont) continue;
       const text = span.textContent;
       if (fullText.length > 0) {
         const lastChar = fullText[fullText.length - 1];
         const firstChar = text[0];
-        const noSpace = !lastChar || !firstChar || lastChar === ' ' || firstChar === ' '
-          || lastChar === '(' || firstChar === ')' || lastChar === '[' || firstChar === ']'
-          || (/\d/.test(lastChar) && (firstChar === ']' || firstChar === ',' || firstChar === '–'))
-          || (lastChar === ',' && /\d/.test(firstChar));
-        if (!noSpace) fullText += ' ';
+        if (lastChar && firstChar && lastChar !== ' ' && firstChar !== ' ' && lastChar !== '(' && firstChar !== ')') {
+          fullText += ' ';
+        }
       }
       fullSegments.push({ span, start: fullText.length, len: text.length });
       fullText += text;
