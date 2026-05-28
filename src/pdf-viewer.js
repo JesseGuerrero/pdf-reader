@@ -751,37 +751,29 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: match [N] within individual spans to avoid
-      // cross-layer range issues from PDFs with duplicate text layers.
-      // The invisible link layer splits [ and ] across spans, so only
-      // visible-layer spans contain a complete [N] match.
-      const seen = new Set();
-      const pad = 2;
+      // Bracket citations: wrap [N] inline within spans that contain
+      // the complete pattern. The invisible link layer splits brackets
+      // across spans, so only visible-layer spans match.
       for (const span of spans) {
         const text = span.textContent;
-        if (!/\[\d/.test(text)) continue;
-        const node = span.firstChild;
-        if (!node || node.nodeType !== 3) continue;
-        for (const m of text.matchAll(/\[(\d{1,4})\]/g)) {
+        const allMatches = [...text.matchAll(/\[(\d{1,4})\]/g)];
+        const valid = allMatches.filter(m => referencesMap[parseInt(m[1])]);
+        if (valid.length === 0) continue;
+
+        let html = '';
+        let last = 0;
+        const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        for (const m of valid) {
           const num = parseInt(m[1]);
-          if (!referencesMap[num]) continue;
-          const range = document.createRange();
-          range.setStart(node, m.index);
-          range.setEnd(node, m.index + m[0].length);
-          const rect = range.getBoundingClientRect();
-          if (rect.width < 2 || rect.height < 2) continue;
-          const key = Math.round(rect.top) + ',' + Math.round(rect.left);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const el = document.createElement('div');
-          el.className = 'cite-overlay';
-          el.dataset.ref = String(num);
-          el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
-          el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
-          el.style.width = (rect.width + pad * 2) + 'px';
-          el.style.height = (rect.height + pad * 2) + 'px';
-          setupCiteOverlay(el, num);
-          citeLayer.appendChild(el);
+          html += esc(text.slice(last, m.index));
+          html += '<span class="cite-overlay" data-ref="' + num + '" style="position:relative;display:inline;pointer-events:auto;cursor:pointer;">' + esc(m[0]) + '</span>';
+          last = m.index + m[0].length;
+        }
+        html += esc(text.slice(last));
+        span.innerHTML = html;
+
+        for (const ci of span.querySelectorAll('.cite-overlay')) {
+          setupCiteOverlay(ci, parseInt(ci.dataset.ref));
         }
       }
     }
