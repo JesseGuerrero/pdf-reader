@@ -828,46 +828,48 @@ export function initPdfViewer() {
         }
       }
 
-      // Fallback: only for single-layer pages (no split-bracket spans).
-      // On dual-layer pages, the two-phase approach already handled everything.
-      if (bracketPositions.length === 0 && refMatches.length > 0) {
-        const placedRefs = new Set();
-        for (const el of citeLayer.children) {
-          placedRefs.add(el.dataset.ref + '@' + Math.round(parseFloat(el.style.top)));
-        }
-        for (const rm of refMatches) {
-          const key = rm.nums[0] + '@' + Math.round(rm.top);
-          if (placedRefs.has(key)) continue;
-          for (const span of spans) {
-            if (Math.abs(span.offsetTop - rm.top) > 2) continue;
-            if (!span.textContent.includes(rm.text)) continue;
-            const node = span.firstChild;
-            if (!node || node.nodeType !== 3) continue;
-            const idx = span.textContent.indexOf(rm.text);
-            if (idx < 0) continue;
-            try {
-              const range = document.createRange();
-              range.setStart(node, idx);
-              range.setEnd(node, idx + rm.text.length);
-              const rect = range.getBoundingClientRect();
-              if (rect.width < 2 || rect.height < 2) continue;
-              const relTop = rect.top - wrapperRect.top;
-              if (placedRefs.has(rm.nums[0] + '@' + Math.round(relTop))) continue;
-              const el = document.createElement('div');
-              el.className = 'cite-overlay';
-              el.dataset.ref = String(rm.nums[0]);
-              el.dataset.refs = rm.nums.join(',');
-              el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
-              el.style.top = (relTop - pad) + 'px';
-              el.style.width = (rect.width + pad * 2) + 'px';
-              el.style.height = (rect.height + pad * 2) + 'px';
-              setupCiteOverlay(el, rm.nums[0]);
-              citeLayer.appendChild(el);
-              placedRefs.add(rm.nums[0] + '@' + Math.round(relTop));
-              break;
-            } catch (e) {}
+      // Fallback: for any [N] not yet placed by two-phase, match directly.
+      // Use the SHORTEST span containing [N] on each line (visible layer
+      // spans are shorter than invisible full-line spans).
+      const placedNums = new Set();
+      for (const el of citeLayer.children) placedNums.add(el.dataset.ref);
+
+      for (const rm of refMatches) {
+        if (placedNums.has(String(rm.nums[0]))) continue;
+
+        // Find the shortest span containing this [N] at this line
+        let bestSpan = null, bestLen = Infinity;
+        for (const span of spans) {
+          if (Math.abs(span.offsetTop - rm.top) > 2) continue;
+          if (!span.textContent.includes(rm.text)) continue;
+          if (span.textContent.length < bestLen) {
+            bestLen = span.textContent.length;
+            bestSpan = span;
           }
         }
+        if (!bestSpan) continue;
+        const node = bestSpan.firstChild;
+        if (!node || node.nodeType !== 3) continue;
+        const idx = bestSpan.textContent.indexOf(rm.text);
+        if (idx < 0) continue;
+        try {
+          const range = document.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, idx + rm.text.length);
+          const rect = range.getBoundingClientRect();
+          if (rect.width < 2 || rect.height < 2) continue;
+          const el = document.createElement('div');
+          el.className = 'cite-overlay';
+          el.dataset.ref = String(rm.nums[0]);
+          el.dataset.refs = rm.nums.join(',');
+          el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
+          el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
+          el.style.width = (rect.width + pad * 2) + 'px';
+          el.style.height = (rect.height + pad * 2) + 'px';
+          setupCiteOverlay(el, rm.nums[0]);
+          citeLayer.appendChild(el);
+          placedNums.add(String(rm.nums[0]));
+        } catch (e) {}
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
