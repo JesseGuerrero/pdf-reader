@@ -751,45 +751,71 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: wrap [N] inline within spans that contain
-      // the complete pattern. The invisible link layer splits brackets
-      // across spans, so only visible-layer spans match.
+      // Bracket citations: some PDFs have duplicate text layers at different
+      // positions (e.g. 9.96px visible + 10.02px invisible). Use the most
+      // common font-size layer (visible one) and match [N] across its spans.
+      const fontCounts = {};
       for (const span of spans) {
+        const fs = window.getComputedStyle(span).fontSize;
+        fontCounts[fs] = (fontCounts[fs] || 0) + 1;
+      }
+      const dominantFont = Object.entries(fontCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+      let bText = '';
+      const bSegs = [];
+      for (const span of spans) {
+        if (window.getComputedStyle(span).fontSize !== dominantFont) continue;
         const text = span.textContent;
-        const allMatches = [...text.matchAll(/\[(\d+(?:[,\s–—-]+\d+)*)\]/g)];
-        if (allMatches.length === 0) continue;
-        // Extract all ref numbers from each match (handles [4], [8,9], [19-21], [12-14,25-27])
-        const validMatches = [];
-        for (const m of allMatches) {
-          const nums = [];
-          for (const part of m[1].split(/[,\s]+/)) {
-            const rangeMatch = part.match(/^(\d+)[–—-](\d+)$/);
-            if (rangeMatch) {
-              const lo = parseInt(rangeMatch[1]), hi = parseInt(rangeMatch[2]);
-              for (let n = lo; n <= hi; n++) nums.push(n);
-            } else {
-              const n = parseInt(part);
-              if (!isNaN(n)) nums.push(n);
-            }
+        if (bText.length > 0) {
+          const last = bText[bText.length - 1];
+          const first = text[0];
+          if (last && first && last !== ' ' && first !== ' ') bText += ' ';
+        }
+        bSegs.push({ span, start: bText.length, len: text.length });
+        bText += text;
+      }
+
+      const bracketRe = /\[(\d+(?:[,\s–—-]+\d+)*)\]/g;
+      let bm;
+      const pad = 2;
+      while ((bm = bracketRe.exec(bText)) !== null) {
+        const nums = [];
+        for (const part of bm[1].split(/[,\s]+/)) {
+          const rm = part.match(/^(\d+)[–—-](\d+)$/);
+          if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
+          else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
+        }
+        const valid = nums.filter(n => referencesMap[n]);
+        if (valid.length === 0) continue;
+
+        const mStart = bm.index, mEnd = mStart + bm[0].length;
+        const range = document.createRange();
+        let ok = false;
+        for (const seg of bSegs) {
+          const segEnd = seg.start + seg.len;
+          if (!ok && mStart >= seg.start && mStart < segEnd) {
+            range.setStart(seg.span.firstChild || seg.span, mStart - seg.start);
+            ok = true;
           }
-          const validNums = nums.filter(n => referencesMap[n]);
-          if (validNums.length > 0) validMatches.push({ m, nums: validNums });
+          if (ok && mEnd <= segEnd) {
+            range.setEnd(seg.span.firstChild || seg.span, mEnd - seg.start);
+            break;
+          }
         }
-        if (validMatches.length === 0) continue;
+        if (!ok) continue;
 
-        let html = '';
-        let last = 0;
-        const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        for (const { m, nums } of validMatches) {
-          html += esc(text.slice(last, m.index));
-          html += '<span class="cite-bracket" data-ref="' + nums[0] + '" data-refs="' + nums.join(',') + '">' + esc(m[0]) + '</span>';
-          last = m.index + m[0].length;
-        }
-        html += esc(text.slice(last));
-        span.innerHTML = html;
-
-        for (const ci of span.querySelectorAll('.cite-bracket')) {
-          setupCiteOverlay(ci, parseInt(ci.dataset.ref));
+        for (const rect of range.getClientRects()) {
+          if (rect.width < 2 || rect.height < 2) continue;
+          const el = document.createElement('div');
+          el.className = 'cite-overlay';
+          el.dataset.ref = String(valid[0]);
+          el.dataset.refs = valid.join(',');
+          el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
+          el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
+          el.style.width = (rect.width + pad * 2) + 'px';
+          el.style.height = (rect.height + pad * 2) + 'px';
+          setupCiteOverlay(el, valid[0]);
+          citeLayer.appendChild(el);
         }
       }
     }
