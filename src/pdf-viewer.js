@@ -794,38 +794,80 @@ export function initPdfViewer() {
         } catch (e) {}
       }
 
-      // Phase 3: match ref numbers to bracket positions by line order.
-      // Deduplicate refMatches by top (dual layers produce duplicates).
-      const seenTops = new Map();
-      const uniqueRefs = [];
-      for (const rm of refMatches) {
-        const key = Math.round(rm.top / 10);
-        if (seenTops.has(key)) continue;
-        seenTops.set(key, true);
-        uniqueRefs.push(rm);
+      if (bracketPositions.length > 0) {
+        // Dual-layer page: match ref numbers to bracket positions by line order.
+        // Deduplicate refMatches by top (dual layers produce duplicates).
+        const seenTops = new Map();
+        const uniqueRefs = [];
+        for (const rm of refMatches) {
+          const key = Math.round(rm.top / 10);
+          if (seenTops.has(key)) continue;
+          seenTops.set(key, true);
+          uniqueRefs.push(rm);
+        }
+
+        uniqueRefs.sort((a, b) => a.top - b.top);
+        bracketPositions.sort((a, b) => a.top - b.top);
+
+        const count = Math.min(uniqueRefs.length, bracketPositions.length);
+        for (let i = 0; i < count; i++) {
+          const ref = uniqueRefs[i];
+          const pos = bracketPositions[i];
+          const charW = pos.rect.width;
+          const estWidth = charW * (ref.text.length + 0.5);
+          const el = document.createElement('div');
+          el.className = 'cite-overlay';
+          el.dataset.ref = String(ref.nums[0]);
+          el.dataset.refs = ref.nums.join(',');
+          el.style.left = (pos.rect.left - wrapperRect.left - pad) + 'px';
+          el.style.top = (pos.rect.top - wrapperRect.top - pad) + 'px';
+          el.style.width = (estWidth + pad * 2) + 'px';
+          el.style.height = (pos.rect.height + pad * 2) + 'px';
+          setupCiteOverlay(el, ref.nums[0]);
+          citeLayer.appendChild(el);
+        }
       }
 
-      // Sort both by vertical position
-      uniqueRefs.sort((a, b) => a.top - b.top);
-      bracketPositions.sort((a, b) => a.top - b.top);
-
-      // Match 1:1
-      const count = Math.min(uniqueRefs.length, bracketPositions.length);
-      for (let i = 0; i < count; i++) {
-        const ref = uniqueRefs[i];
-        const pos = bracketPositions[i];
-        const charW = pos.rect.width;
-        const estWidth = charW * (ref.text.length + 0.5);
-        const el = document.createElement('div');
-        el.className = 'cite-overlay';
-        el.dataset.ref = String(ref.nums[0]);
-        el.dataset.refs = ref.nums.join(',');
-        el.style.left = (pos.rect.left - wrapperRect.left - pad) + 'px';
-        el.style.top = (pos.rect.top - wrapperRect.top - pad) + 'px';
-        el.style.width = (estWidth + pad * 2) + 'px';
-        el.style.height = (pos.rect.height + pad * 2) + 'px';
-        setupCiteOverlay(el, ref.nums[0]);
-        citeLayer.appendChild(el);
+      // Fallback: for any pages (or portions) without split-bracket spans,
+      // match [N] directly in spans. Deduplicate with already-placed overlays.
+      if (citeLayer.children.length < refMatches.length) {
+        const placedRefs = new Set();
+        for (const el of citeLayer.children) {
+          placedRefs.add(el.dataset.ref + '@' + Math.round(parseFloat(el.style.top)));
+        }
+        for (const rm of refMatches) {
+          const key = rm.nums[0] + '@' + Math.round(rm.top);
+          if (placedRefs.has(key)) continue;
+          for (const span of spans) {
+            if (Math.abs(span.offsetTop - rm.top) > 2) continue;
+            if (!span.textContent.includes(rm.text)) continue;
+            const node = span.firstChild;
+            if (!node || node.nodeType !== 3) continue;
+            const idx = span.textContent.indexOf(rm.text);
+            if (idx < 0) continue;
+            try {
+              const range = document.createRange();
+              range.setStart(node, idx);
+              range.setEnd(node, idx + rm.text.length);
+              const rect = range.getBoundingClientRect();
+              if (rect.width < 2 || rect.height < 2) continue;
+              const relTop = rect.top - wrapperRect.top;
+              if (placedRefs.has(rm.nums[0] + '@' + Math.round(relTop))) continue;
+              const el = document.createElement('div');
+              el.className = 'cite-overlay';
+              el.dataset.ref = String(rm.nums[0]);
+              el.dataset.refs = rm.nums.join(',');
+              el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
+              el.style.top = (relTop - pad) + 'px';
+              el.style.width = (rect.width + pad * 2) + 'px';
+              el.style.height = (rect.height + pad * 2) + 'px';
+              setupCiteOverlay(el, rm.nums[0]);
+              citeLayer.appendChild(el);
+              placedRefs.add(rm.nums[0] + '@' + Math.round(relTop));
+              break;
+            } catch (e) {}
+          }
+        }
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
