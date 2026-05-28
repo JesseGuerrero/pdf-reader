@@ -229,6 +229,29 @@ body {
   background: #45475a;
 }
 
+#btn-ocr.ocr-done {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#btn-ocr.loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+#btn-ocr.loading::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #6c7086;
+  border-top-color: #cdd6f4;
+  border-radius: 50%;
+  animation: cite-spin 0.6s linear infinite;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
 #btn-refresh-citations.loading {
   pointer-events: none;
   opacity: 0.7;

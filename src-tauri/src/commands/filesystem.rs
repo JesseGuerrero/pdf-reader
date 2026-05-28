@@ -105,6 +105,44 @@ pub fn create_directory(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn ocr_pdf(pdf_path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&pdf_path);
+    let filename = src.file_name().ok_or("Invalid filename")?.to_string_lossy();
+
+    let backup_dir = std::path::Path::new("/tmp/pdf-reader-originals");
+    std::fs::create_dir_all(backup_dir).map_err(|e| e.to_string())?;
+    let backup_path = backup_dir.join(&*filename);
+    std::fs::copy(&pdf_path, &backup_path).map_err(|e| e.to_string())?;
+
+    let tmp_out = format!("{}.ocr_tmp.pdf", pdf_path);
+    let output = std::process::Command::new("ocrmypdf")
+        .args(["--force-ocr", "--optimize", "0", &pdf_path, &tmp_out])
+        .output()
+        .map_err(|e| format!("Failed to run ocrmypdf: {}", e))?;
+
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&tmp_out);
+        return Err(format!("ocrmypdf failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    std::fs::rename(&tmp_out, &pdf_path).map_err(|e| e.to_string())?;
+    Ok(backup_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn list_ocr_originals() -> Result<Vec<String>, String> {
+    let dir = std::path::Path::new("/tmp/pdf-reader-originals");
+    if !dir.exists() { return Ok(vec![]); }
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        paths.push(entry.path().to_string_lossy().to_string());
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+#[tauri::command]
 pub fn copy_file_to_folder(source: String, folder: String) -> Result<String, String> {
     let src = Path::new(&source);
     let filename = src.file_name().ok_or("Invalid source filename")?;

@@ -49,6 +49,8 @@ pub fn run() {
             commands::filesystem::pick_folder,
             commands::filesystem::copy_file_to_folder,
             commands::filesystem::create_directory,
+            commands::filesystem::ocr_pdf,
+            commands::filesystem::list_ocr_originals,
             commands::chat::send_chat_message,
             commands::storage::save_chat_tree,
             commands::storage::load_chat_tree,

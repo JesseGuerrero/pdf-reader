@@ -309,6 +309,7 @@ export function initPdfViewer() {
     renderPage();
     extractAllText();
     loadGrobidRefs(filePath);
+    checkOcrState();
   }
 
   let pendingRender = false;
@@ -537,6 +538,69 @@ export function initPdfViewer() {
   }
 
   citeBtnEl.addEventListener('click', () => refreshCitations());
+
+  // --- OCR button ---
+  const ocrBtnEl = document.getElementById('btn-ocr');
+  let ocrOriginals = new Set();
+
+  async function checkOcrState() {
+    if (!currentPdfPath) return;
+    try {
+      const originals = await invoke('list_ocr_originals');
+      ocrOriginals = new Set(originals);
+      const filename = currentPdfPath.split('/').pop();
+      const backupPath = '/tmp/pdf-reader-originals/' + filename;
+      if (ocrOriginals.has(backupPath)) {
+        ocrBtnEl.classList.add('ocr-done');
+        ocrBtnEl.title = 'Already OCR\'d — right-click to copy original path';
+        ocrBtnEl.dataset.originalPath = backupPath;
+      } else {
+        ocrBtnEl.classList.remove('ocr-done');
+        ocrBtnEl.title = 'OCR this PDF for cleaner text layer';
+        ocrBtnEl.dataset.originalPath = '';
+      }
+    } catch (e) {}
+  }
+
+  ocrBtnEl.addEventListener('click', async () => {
+    if (!currentPdfPath) return;
+    if (ocrBtnEl.classList.contains('ocr-done')) return;
+    ocrBtnEl.classList.add('loading');
+    ocrBtnEl.disabled = true;
+    ocrBtnEl.textContent = 'OCR...';
+    try {
+      const backupPath = await invoke('ocr_pdf', { pdfPath: currentPdfPath });
+      ocrBtnEl.dataset.originalPath = backupPath;
+      ocrBtnEl.classList.add('ocr-done');
+      ocrBtnEl.title = 'Already OCR\'d — right-click to copy original path';
+      // Reload the PDF
+      const fileName = currentPdfPath.split('/').pop();
+      await loadPdf(currentPdfPath, fileName);
+    } catch (e) {
+      console.error('OCR failed:', e);
+      ocrBtnEl.title = 'OCR failed: ' + e;
+    } finally {
+      ocrBtnEl.classList.remove('loading');
+      ocrBtnEl.disabled = false;
+      ocrBtnEl.textContent = 'OCR';
+    }
+  });
+
+  ocrBtnEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const path = ocrBtnEl.dataset.originalPath;
+    if (!path) return;
+    navigator.clipboard.writeText(path).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = path;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    });
+    ocrBtnEl.title = 'Copied: ' + path;
+    setTimeout(() => { ocrBtnEl.title = 'Already OCR\'d — right-click to copy original path'; }, 2000);
+  });
 
   function parseReference(refText) {
     const yearMatch = refText.match(/\b((?:19|20)\d{2})[a-z]?\b/);
