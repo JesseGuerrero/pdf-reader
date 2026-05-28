@@ -666,21 +666,45 @@ export function initPdfViewer() {
     const wrapperRect = textLayerDiv.getBoundingClientRect();
     const spans = Array.from(textLayerDiv.querySelectorAll('span'));
 
-    // Build full text from spans for range-based matching
-    // Filter out invisible/duplicate text layer spans (zero-width or outside viewport)
+    // Build full text from spans for range-based matching.
+    // Some PDFs have an invisible accessibility layer with long full-line
+    // spans at wrong positions. Detect and exclude it by finding the font
+    // with the longest average span length.
+    const fontStats = {};
+    for (const span of spans) {
+      const r = span.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      const fs = window.getComputedStyle(span).fontSize;
+      if (!fontStats[fs]) fontStats[fs] = { count: 0, totalLen: 0 };
+      fontStats[fs].count++;
+      fontStats[fs].totalLen += span.textContent.length;
+    }
+    let excludeFont = null;
+    const fonts = Object.entries(fontStats);
+    if (fonts.length > 1) {
+      fonts.sort((a, b) => (b[1].totalLen / b[1].count) - (a[1].totalLen / a[1].count));
+      const longest = fonts[0], second = fonts[1];
+      const avgLongest = longest[1].totalLen / longest[1].count;
+      const avgSecond = second[1].totalLen / second[1].count;
+      if (avgLongest > avgSecond * 2) excludeFont = longest[0];
+    }
+
     let fullText = '';
     const fullSegments = [];
     for (let si = 0; si < spans.length; si++) {
       const span = spans[si];
-      const rect = span.getBoundingClientRect();
-      if (rect.width < 1 || rect.height < 1) continue;
+      const r = span.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      if (excludeFont && window.getComputedStyle(span).fontSize === excludeFont) continue;
       const text = span.textContent;
-      if (si > 0 && fullText.length > 0) {
+      if (fullText.length > 0) {
         const lastChar = fullText[fullText.length - 1];
         const firstChar = text[0];
-        if (lastChar && firstChar && lastChar !== ' ' && firstChar !== ' ' && lastChar !== '(' && firstChar !== ')') {
-          fullText += ' ';
-        }
+        const noSpace = !lastChar || !firstChar || lastChar === ' ' || firstChar === ' '
+          || lastChar === '(' || firstChar === ')' || lastChar === '[' || firstChar === ']'
+          || (/\d/.test(lastChar) && (firstChar === ']' || firstChar === ',' || firstChar === '–'))
+          || (lastChar === ',' && /\d/.test(firstChar));
+        if (!noSpace) fullText += ' ';
       }
       fullSegments.push({ span, start: fullText.length, len: text.length });
       fullText += text;
@@ -751,127 +775,52 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: two-phase approach for PDFs with dual text layers.
-      // Phase 1: get ref numbers from spans with complete [N] (any layer).
-      // Phase 2: get positions from spans ending with [ (visible/link layer).
-      // Match by line order.
+      // Bracket citations: find [N] in fullText (built from visible layer
+      // only, with no spaces around brackets so cross-font [N] concatenates).
+      // Create overlay divs positioned via range rects.
       const pad = 2;
-
-      // Phase 1: find [N] in concatenated fullText (handles digits split
-      // across spans in different fonts) and record positions + ref numbers
-      const refMatches = [];
-      const bracketRe = /\[(\d+(?:[,\s–—-]+\d+)*)\]/g;
+      const bracketRe = /\[(\d+(?:[,–—-]+\d+)*)\]/g;
       let bm;
       while ((bm = bracketRe.exec(fullText)) !== null) {
         const nums = [];
-        for (const part of bm[1].split(/[,\s]+/)) {
+        for (const part of bm[1].split(/[,]+/)) {
           const rm = part.match(/^(\d+)[–—-](\d+)$/);
           if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
           else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
         }
         const valid = nums.filter(n => referencesMap[n]);
-        if (valid.length > 0) {
-          // Find which segment this match starts in to get offsetTop
-          const seg = fullSegments.find(s => bm.index >= s.start && bm.index < s.start + s.len);
-          const top = seg ? seg.span.offsetTop : 0;
-          refMatches.push({ nums: valid, top, text: bm[0], ftStart: bm.index, ftEnd: bm.index + bm[0].length });
-        }
-      }
+        if (valid.length === 0) continue;
 
-      // Phase 2: find [ positions from visible-layer spans (end with [)
-      const bracketPositions = [];
-      for (const span of spans) {
-        const text = span.textContent;
-        const idx = text.lastIndexOf('[');
-        if (idx < 0 || idx < text.length - 3) continue;
-        const node = span.firstChild;
-        if (!node || node.nodeType !== 3) continue;
-        try {
-          const range = document.createRange();
-          range.setStart(node, idx);
-          range.setEnd(node, text.length);
-          const rect = range.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            bracketPositions.push({ rect, top: span.offsetTop });
-          }
-        } catch (e) {}
-      }
-
-      if (bracketPositions.length > 0) {
-        // Dual-layer page: match ref numbers to bracket positions by line order.
-        // Deduplicate refMatches by top (dual layers produce duplicates).
-        const seenTops = new Map();
-        const uniqueRefs = [];
-        for (const rm of refMatches) {
-          const key = Math.round(rm.top / 10);
-          if (seenTops.has(key)) continue;
-          seenTops.set(key, true);
-          uniqueRefs.push(rm);
-        }
-
-        uniqueRefs.sort((a, b) => a.top - b.top);
-        bracketPositions.sort((a, b) => a.top - b.top);
-
-        const count = Math.min(uniqueRefs.length, bracketPositions.length);
-        for (let i = 0; i < count; i++) {
-          const ref = uniqueRefs[i];
-          const pos = bracketPositions[i];
-          const charW = pos.rect.width;
-          const estWidth = charW * (ref.text.length + 0.5);
-          const el = document.createElement('div');
-          el.className = 'cite-overlay';
-          el.dataset.ref = String(ref.nums[0]);
-          el.dataset.refs = ref.nums.join(',');
-          el.style.left = (pos.rect.left - wrapperRect.left - pad) + 'px';
-          el.style.top = (pos.rect.top - wrapperRect.top - pad) + 'px';
-          el.style.width = (estWidth + pad * 2) + 'px';
-          el.style.height = (pos.rect.height + pad * 2) + 'px';
-          setupCiteOverlay(el, ref.nums[0]);
-          citeLayer.appendChild(el);
-        }
-      }
-
-      // Fallback: for any [N] not yet placed by two-phase, match directly.
-      // Use the SHORTEST span containing [N] on each line (visible layer
-      // spans are shorter than invisible full-line spans).
-      const placedNums = new Set();
-      for (const el of citeLayer.children) placedNums.add(el.dataset.ref);
-
-      for (const rm of refMatches) {
-        if (placedNums.has(rm.nums[0] + '@' + rm.ftStart)) continue;
-
-        // Create range across fullSegments for this match
+        const mStart = bm.index, mEnd = mStart + bm[0].length;
         const range = document.createRange();
         let ok = false;
         for (const seg of fullSegments) {
           const segEnd = seg.start + seg.len;
-          if (!ok && rm.ftStart >= seg.start && rm.ftStart < segEnd) {
+          if (!ok && mStart >= seg.start && mStart < segEnd) {
             const node = seg.span.firstChild || seg.span;
-            try { range.setStart(node, rm.ftStart - seg.start); ok = true; } catch(e) { break; }
+            try { range.setStart(node, mStart - seg.start); ok = true; } catch(e) { break; }
           }
-          if (ok && rm.ftEnd <= segEnd) {
+          if (ok && mEnd <= segEnd) {
             const node = seg.span.firstChild || seg.span;
-            try { range.setEnd(node, rm.ftEnd - seg.start); } catch(e) { ok = false; }
+            try { range.setEnd(node, mEnd - seg.start); } catch(e) { ok = false; }
             break;
           }
         }
         if (!ok) continue;
 
-        const rects = range.getClientRects();
-        for (const rect of rects) {
+        for (const rect of range.getClientRects()) {
           if (rect.width < 2 || rect.height < 2) continue;
           const el = document.createElement('div');
           el.className = 'cite-overlay';
-          el.dataset.ref = String(rm.nums[0]);
-          el.dataset.refs = rm.nums.join(',');
+          el.dataset.ref = String(valid[0]);
+          el.dataset.refs = valid.join(',');
           el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
           el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
           el.style.width = (rect.width + pad * 2) + 'px';
           el.style.height = (rect.height + pad * 2) + 'px';
-          setupCiteOverlay(el, rm.nums[0]);
+          setupCiteOverlay(el, valid[0]);
           citeLayer.appendChild(el);
         }
-        placedNums.add(rm.nums[0] + '@' + rm.ftStart);
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
