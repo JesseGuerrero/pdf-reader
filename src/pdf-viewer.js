@@ -742,64 +742,49 @@ export function initPdfViewer() {
         }
       }
     } else {
-      // Bracket citations: [N]
-      for (const span of spans) {
-        const text = span.textContent;
-        if (!/\[\d/.test(text)) continue;
-        const allMatches = [...text.matchAll(/\[\d{1,4}\]/g)];
-        const valid = allMatches.filter(m => referencesMap[parseInt(m[0].match(/\d+/)[0])]);
-        if (valid.length === 0) continue;
+      // Bracket citations: [N] — use overlay approach (same as parenthetical)
+      // to handle PDFs with duplicate text layers
+      const bracketRe = /\[(\d{1,4})\]/g;
+      let bm;
+      while ((bm = bracketRe.exec(fullText)) !== null) {
+        const num = parseInt(bm[1]);
+        if (!referencesMap[num]) continue;
 
-        let html = '';
-        let last = 0;
-        const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        for (const m of valid) {
-          const num = parseInt(m[0].match(/\d+/)[0]);
-          html += esc(text.slice(last, m.index));
-          html += '<span class="cite-inline" data-ref="' + num + '">' + esc(m[0]) + '</span>';
-          last = m.index + m[0].length;
+        const matchStart = bm.index;
+        const matchEnd = matchStart + bm[0].length;
+
+        const range = document.createRange();
+        let rangeStartSet = false;
+        for (const seg of fullSegments) {
+          const segEnd = seg.start + seg.len;
+          if (!rangeStartSet && matchStart >= seg.start && matchStart < segEnd) {
+            const node = seg.span.firstChild || seg.span;
+            range.setStart(node, matchStart - seg.start);
+            rangeStartSet = true;
+          }
+          if (rangeStartSet && matchEnd <= segEnd) {
+            const node = seg.span.firstChild || seg.span;
+            range.setEnd(node, matchEnd - seg.start);
+            break;
+          }
         }
-        html += esc(text.slice(last));
-        span.innerHTML = html;
+        if (!rangeStartSet) continue;
 
-        for (const ci of span.querySelectorAll('.cite-inline')) {
-          const refNum = parseInt(ci.dataset.ref);
-          const ref = referencesMap[refNum];
-          if (!ref) continue;
-          const title = ref.title || '';
-          const venue = ref.venue || '';
-          const year = ref.year || '';
-          const tag = venue || year ? ' (' + [venue, year].filter(Boolean).join(', ') + ')' : '';
-          const disp = title + tag;
-          const url = 'https://scholar.google.com/scholar?q=' + encodeURIComponent(title);
-
-          ci.addEventListener('click', (e) => {
-            const sel = window.getSelection();
-            if (sel && !sel.isCollapsed) return;
-            e.stopPropagation();
-            if (onCitationChat) onCitationChat(refNum, disp, url);
-          });
-
-          let popup = null, pt = null;
-          ci.addEventListener('mouseenter', () => {
-            clearTimeout(pt);
-            if (popup) return;
-            popup = document.createElement('div');
-            popup.className = 'cite-popup';
-            popup.innerHTML = '<div class="cite-popup-title">' + disp + '</div><a class="cite-popup-link" href="' + url + '">Google Scholar ↗</a>';
-            popup.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
-            popup.addEventListener('mouseenter', () => clearTimeout(pt));
-            popup.addEventListener('mouseleave', () => { pt = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200); });
-            const cr = ci.getBoundingClientRect();
-            const wr = pageWrapper.getBoundingClientRect();
-            popup.style.left = (cr.left - wr.left) + 'px';
-            popup.style.top = (cr.bottom - wr.top + 2) + 'px';
-            pageWrapper.appendChild(popup);
-          });
-          ci.addEventListener('mouseleave', () => {
-            pt = setTimeout(() => { if (popup) { popup.remove(); popup = null; } }, 200);
-          });
-        }
+        const clientRects = range.getClientRects();
+        if (clientRects.length === 0) continue;
+        // Use the last rect (in case of duplicate layers, it's the visible one)
+        const rect = clientRects[clientRects.length - 1];
+        if (rect.width < 2) continue;
+        const pad = 2;
+        const el = document.createElement('div');
+        el.className = 'cite-overlay';
+        el.dataset.ref = String(num);
+        el.style.left = (rect.left - wrapperRect.left - pad) + 'px';
+        el.style.top = (rect.top - wrapperRect.top - pad) + 'px';
+        el.style.width = (rect.width + pad * 2) + 'px';
+        el.style.height = (rect.height + pad * 2) + 'px';
+        setupCiteOverlay(el, num);
+        citeLayer.appendChild(el);
       }
     }
     console.log('[cite] style:', citationStyle, 'overlays:', citeLayer.children.length, 'refs:', Object.keys(referencesMap).length);
