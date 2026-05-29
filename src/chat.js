@@ -263,7 +263,7 @@ export function initChat(pdfViewer) {
 
       const tileUrl = (z) => {
         const { x, y } = latLonToTile(lat, lon, z);
-        return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+        return `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
       };
 
       let mapsMd = '';
@@ -504,9 +504,27 @@ export function initChat(pdfViewer) {
     }
   });
 
-  pdfViewer.setOnCitationChat((refNum, displayTitle, googleUrl) => {
+  pdfViewer.setOnCitationChat((refNums, md, occData) => {
     if (!currentTree) return;
-    currentTree.addMessage('assistant', displayTitle);
+    const citeData = [];
+    for (const n of refNums) {
+      const ref = pdfViewer.getReferencesMap()[n];
+      const isUnmatched = !ref || ref.confidence === 'unmatched' || !ref.title;
+      const venue = (!isUnmatched && ref.venue) || '';
+      const year = (!isUnmatched && ref.year) || '';
+      const tag = venue || year ? ` (${[venue, year].filter(Boolean).join(', ')})` : '';
+      const title = isUnmatched ? '(unmatched)' : (ref.split ? '(split)' : '') + ref.title + tag;
+      const url = isUnmatched ? '' : 'https://scholar.google.com/scholar?q=' + encodeURIComponent(ref.title);
+      const occs = (occData && occData[n]) || [];
+      citeData.push({ n, title, url, occs });
+    }
+    // Embed citation data as a hidden JSON tag so renderMessages can rebuild buttons
+    const mdLines = citeData.map(l => {
+      const link = l.url ? `\n\n[Google Scholar ↗](${l.url})` : '';
+      return `**[${l.n}]** ${l.title}${link}`;
+    }).join('\n\n---\n\n');
+    const dataTag = `<!--CITE:${JSON.stringify(citeData)}-->`;
+    currentTree.addMessage('assistant', dataTag + '\n' + mdLines);
     renderMessages();
     saveCurrentTree();
   });
@@ -959,9 +977,45 @@ export function initChat(pdfViewer) {
       const div = document.createElement('div');
       div.className = `chat-message ${msg.role}`;
       if (msg.role === 'assistant') {
-        const citations = collectCitations(msg.content);
-        const refsBlock = buildReferencesBlock(citations);
-        div.innerHTML = marked.parse(msg.content + refsBlock);
+        const citeMatch = msg.content.match(/<!--CITE:(.*?)-->/);
+        let citeData = null;
+        if (citeMatch) { try { citeData = JSON.parse(citeMatch[1]); } catch {} }
+
+        if (citeData) {
+          // Render each citation as its own block: title, page buttons, Google link
+          for (let ci = 0; ci < citeData.length; ci++) {
+            const l = citeData[ci];
+            if (ci > 0) {
+              const hr = document.createElement('hr');
+              div.appendChild(hr);
+            }
+            const titleDiv = document.createElement('div');
+            titleDiv.innerHTML = `<strong>[${l.n}]</strong> ${l.title}`;
+            div.appendChild(titleDiv);
+
+            const navDiv = document.createElement('div');
+            navDiv.className = 'cite-nav-row';
+            for (let oi = 0; oi < (l.occs || []).length; oi++) {
+              const btn = document.createElement('button');
+              btn.className = 'cite-goto-btn';
+              btn.textContent = `p${l.occs[oi].page}`;
+              const idx = oi, num = l.n;
+              btn.addEventListener('click', () => pdfViewer.goToOccurrence(num, idx));
+              navDiv.appendChild(btn);
+            }
+            div.appendChild(navDiv);
+
+            if (l.url) {
+              const link = document.createElement('a');
+              link.href = l.url;
+              link.textContent = 'Google Scholar ↗';
+              link.style.fontSize = '12px';
+              link.style.color = '#89b4fa';
+              div.appendChild(link);
+            }
+          }
+        } else {
+        div.innerHTML = marked.parse(msg.content);
 
         const editBtn = document.createElement('button');
         editBtn.className = 'msg-edit-btn';
@@ -990,6 +1044,7 @@ export function initChat(pdfViewer) {
           ta.focus();
         });
         div.appendChild(editBtn);
+        } // end else (non-citation assistant message)
       } else {
         div.textContent = msg.content;
       }

@@ -84,6 +84,20 @@ fn sort_tree(nodes: &mut [FileNode]) {
 }
 
 #[tauri::command]
+pub async fn extract_pdf_text(path: String, first_page: Option<u32>, last_page: Option<u32>) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("pdftotext");
+    cmd.arg("-layout").arg("-nopgbrk");
+    if let Some(f) = first_page { cmd.arg("-f").arg(f.to_string()); }
+    if let Some(l) = last_page { cmd.arg("-l").arg(l.to_string()); }
+    cmd.arg(&path).arg("-");
+    let output = cmd.output().map_err(|e| format!("pdftotext failed: {}", e))?;
+    if !output.status.success() {
+        return Err(format!("pdftotext error: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
 pub fn read_pdf_bytes(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(general_purpose::STANDARD.encode(&bytes))

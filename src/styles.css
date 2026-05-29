@@ -201,6 +201,7 @@ body {
   flex: 1;
   min-width: 300px;
   background: #11111b;
+  overflow: hidden;
 }
 
 #pdf-controls {
@@ -345,11 +346,11 @@ body {
   pointer-events: auto;
   cursor: pointer !important;
   border-radius: 2px;
-  background: rgba(0, 200, 0, 0.4);
+  background: rgba(255, 255, 0, 0.15);
 }
 
 .cite-overlay:hover {
-  background: rgba(0, 200, 0, 0.6);
+  background: rgba(255, 255, 0, 0.4);
 }
 
 .textLayer .cite-bracket {
@@ -403,11 +404,94 @@ body {
   line-height: 1.4;
 }
 
+.cite-conf {
+  display: inline-block;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-right: 3px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.cite-conf-high {
+  background: rgba(166, 227, 161, 0.3);
+  color: #a6e3a1;
+}
+
+.cite-conf-med {
+  background: rgba(249, 226, 175, 0.3);
+  color: #f9e2af;
+}
+
+.cite-conf-low {
+  background: rgba(243, 139, 168, 0.3);
+  color: #f38ba8;
+}
+
 .cite-popup-link {
   color: #89b4fa;
   text-decoration: underline;
   font-size: 10px;
   cursor: pointer;
+}
+
+.cite-popup-goto {
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+
+.cite-popup-goto:hover { background: #45475a; }
+
+.cite-goto-btn {
+  background: #313244;
+  color: #89b4fa;
+  border: 1px solid #45475a;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  margin: 4px 4px 0 0;
+  display: inline-block;
+}
+
+.cite-goto-btn:hover { background: #45475a; }
+
+.cite-ref-btn {
+  color: #f38ba8;
+  border-color: #f38ba8;
+}
+
+.cite-nav-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.cite-nav-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #a6adc8;
+}
+
+.cite-popup-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.cite-popup-ref {
+  color: #f38ba8;
+  border-color: #f38ba8;
 }
 
 .textLayer br {
@@ -693,6 +777,64 @@ body {
 
 .msg-edit-textarea:focus { border-color: #89b4fa; }
 
+
+.search-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+}
+
+#search-input {
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  outline: none;
+}
+
+#search-input:focus { border-color: #89b4fa; }
+
+#search-case-label {
+  font-size: 10px;
+  color: #a6adc8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#search-case { width: 12px; height: 12px; }
+
+#search-count {
+  font-size: 10px;
+  color: #a6adc8;
+  min-width: 40px;
+}
+
+.search-bar button {
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.search-bar button:hover { background: #45475a; }
+
+.search-hl-overlay {
+  background: rgba(0, 200, 255, 0.35);
+  border-radius: 2px;
+}
+
+.search-hl-active {
+  background: rgba(0, 200, 255, 0.55);
+  outline: 2px solid rgba(0, 200, 255, 0.8);
+}
 
 .zoom-hint {
   font-size: 11px;

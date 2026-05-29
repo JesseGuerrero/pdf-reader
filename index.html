@@ -28,8 +28,16 @@
           <span id="zoom-level">100%</span>
           <button id="btn-zoom-in">+</button>
           <span class="zoom-hint">Ctrl+Scroll to zoom</span>
+          <span class="search-bar">
+            <input id="search-input" type="text" placeholder="Search..." size="12">
+            <label id="search-case-label"><input id="search-case" type="checkbox"> Aa</label>
+            <button id="btn-search-prev" title="Previous match">&uarr;</button>
+            <button id="btn-search-next" title="Next match">&darr;</button>
+            <span id="search-count"></span>
+          </span>
           <button id="btn-ocr" title="OCR this PDF for cleaner text layer">OCR</button>
-          <button id="btn-refresh-citations" title="Refresh citations from GROBID">&#x21bb; Citations</button>
+          <button id="btn-refresh-citations" title="Refresh citations (LLM)">&#x21bb; Citations</button>
+          <button id="btn-goto-refs" title="Go to References section">Ref</button>
         </div>
         <div id="pdf-container">
           <div id="pdf-placeholder">Select a PDF from the file explorer</div>

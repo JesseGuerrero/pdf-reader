@@ -15,7 +15,7 @@ pub async fn send_chat_message(
     let body = json!({
         "model": model,
         "messages": messages,
-        "max_tokens": 4096,
+        "max_tokens": 16384,
     });
 
     let response = client

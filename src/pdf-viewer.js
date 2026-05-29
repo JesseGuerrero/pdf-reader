@@ -33,6 +33,129 @@ export function initPdfViewer() {
   let onStampDelete = null;
   let onCiteResolve = null;
   let pendingHighlight = null;
+  let citationOccurrences = {}; // refNum → [{page, charStart}]
+
+  // --- Keyword search ---
+  let searchMatches = []; // [{page, spanIndex, startOffset, endOffset}]
+  let searchCurrentIdx = -1;
+  let searchQuery = '';
+  let searchCaseSensitive = false;
+
+  const searchInput = document.getElementById('search-input');
+  const searchCase = document.getElementById('search-case');
+  const searchCount = document.getElementById('search-count');
+
+  function buildSearchMatches(query, caseSensitive) {
+    searchMatches = [];
+    if (!query || pageTexts.length === 0) return;
+    for (let p = 0; p < pageTexts.length; p++) {
+      const text = caseSensitive ? pageTexts[p] : pageTexts[p].toLowerCase();
+      const q = caseSensitive ? query : query.toLowerCase();
+      let idx = 0;
+      while ((idx = text.indexOf(q, idx)) !== -1) {
+        searchMatches.push({ page: p + 1, charStart: idx, charEnd: idx + q.length });
+        idx += q.length;
+      }
+    }
+  }
+
+  function highlightSearchOnPage() {
+    pageWrapper.querySelectorAll('.search-hl-overlay').forEach(el => el.remove());
+    if (!searchQuery) return;
+
+    const spans = textLayerDiv.querySelectorAll('span');
+    const wrapperRect = pageWrapper.getBoundingClientRect();
+    const q = searchCaseSensitive ? searchQuery : searchQuery.toLowerCase();
+
+    // Count which match on this page we're at (for active highlight)
+    let pageMatchesBefore = 0;
+    for (const m of searchMatches) {
+      if (m.page < currentPage) pageMatchesBefore++;
+    }
+
+    let matchIdx = 0;
+    for (const span of spans) {
+      const spanText = span.textContent;
+      const searchIn = searchCaseSensitive ? spanText : spanText.toLowerCase();
+      let pos = 0;
+      while ((pos = searchIn.indexOf(q, pos)) !== -1) {
+        const globalIdx = pageMatchesBefore + matchIdx;
+        const isActive = globalIdx === searchCurrentIdx;
+        const node = span.firstChild || span;
+        const range = document.createRange();
+        range.setStart(node, pos);
+        range.setEnd(node, pos + q.length);
+
+        const rects = range.getClientRects();
+        for (let i = 0; i < rects.length; i++) {
+          const r = rects[i];
+          if (r.width < 1) continue;
+          const hl = document.createElement('div');
+          hl.className = 'search-hl-overlay' + (isActive ? ' search-hl-active' : '');
+          hl.style.position = 'absolute';
+          hl.style.left = (r.left - wrapperRect.left) + 'px';
+          hl.style.top = (r.top - wrapperRect.top) + 'px';
+          hl.style.width = r.width + 'px';
+          hl.style.height = r.height + 'px';
+          hl.style.pointerEvents = 'none';
+          hl.style.zIndex = '6';
+          pageWrapper.appendChild(hl);
+          if (isActive && i === 0) {
+            const hlRect = hl.getBoundingClientRect();
+            const containerRect = pdfContainer.getBoundingClientRect();
+            const scrollTop = pdfContainer.scrollTop + (hlRect.top - containerRect.top) - containerRect.height / 2;
+            pdfContainer.scrollTo({ top: scrollTop, behavior: 'smooth' });
+          }
+        }
+        matchIdx++;
+        pos += q.length;
+      }
+    }
+  }
+
+  function doSearch(direction) {
+    const query = searchInput.value;
+    const caseSensitive = searchCase.checked;
+
+    if (query !== searchQuery || caseSensitive !== searchCaseSensitive) {
+      searchQuery = query;
+      searchCaseSensitive = caseSensitive;
+      buildSearchMatches(query, caseSensitive);
+      searchCurrentIdx = searchMatches.length > 0 ? 0 : -1;
+    } else if (searchMatches.length > 0) {
+      if (direction === 'next') {
+        searchCurrentIdx = (searchCurrentIdx + 1) % searchMatches.length;
+      } else {
+        searchCurrentIdx = (searchCurrentIdx - 1 + searchMatches.length) % searchMatches.length;
+      }
+    }
+
+    if (searchMatches.length === 0) {
+      searchCount.textContent = query ? '0/0' : '';
+      highlightSearchOnPage();
+      return;
+    }
+
+    searchCount.textContent = `${searchCurrentIdx + 1}/${searchMatches.length}`;
+
+    const target = searchMatches[searchCurrentIdx];
+    if (target.page !== currentPage) {
+      currentPage = target.page;
+      renderPage();
+    } else {
+      highlightSearchOnPage();
+    }
+  }
+
+  document.getElementById('btn-search-next').addEventListener('click', () => doSearch('next'));
+  document.getElementById('btn-search-prev').addEventListener('click', () => doSearch('prev'));
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doSearch(e.shiftKey ? 'prev' : 'next'); }
+  });
+  searchCase.addEventListener('change', () => {
+    searchQuery = '';
+    doSearch('next');
+  });
   let referencesMap = {};
   let onCitationChat = null;
 
@@ -308,7 +431,7 @@ export function initPdfViewer() {
     pageWrapper.style.display = '';
     renderPage();
     extractAllText();
-    loadGrobidRefs(filePath);
+    loadCitationPipeline(filePath);
     checkOcrState();
   }
 
@@ -360,9 +483,14 @@ export function initPdfViewer() {
         currentTextLayer = textLayer;
         await textLayer.render();
         makeCitationsClickable();
+        highlightSearchOnPage();
         if (pendingHighlight) {
           highlightReferenceText(pendingHighlight);
           pendingHighlight = null;
+        }
+        if (pendingScrollCitation) {
+          scrollToCitation(pendingScrollCitation.refNum, pendingScrollCitation.charStart);
+          pendingScrollCitation = null;
         }
       } catch (textErr) {
         console.error('TextLayer error:', textErr);
@@ -437,115 +565,297 @@ export function initPdfViewer() {
     // Extract refs section raw text for author-year parsing (use last occurrence)
     const lastRefsIdx = Math.max(pdfText.lastIndexOf('References'), pdfText.lastIndexOf('REFERENCES'), pdfText.lastIndexOf('Bibliography'));
     refsRawText = lastRefsIdx >= 0 ? pdfText.slice(lastRefsIdx) : '';
-    referencesMap = buildReferencesMap(pdfText);
-    console.log('[refs] referencesMap size:', Object.keys(referencesMap).length, 'first keys:', Object.keys(referencesMap).slice(0, 5));
-    const firstRefs = Object.entries(referencesMap).slice(0, 3);
-    for (const [k, v] of firstRefs) console.log(`[refs] ${k}: author=${v.firstAuthor} year=${v.year} title=${(v.title||'').slice(0,60)}`);
+    // Only set regex-based map if LLM pipeline hasn't populated it yet
     if (Object.keys(referencesMap).length === 0) {
-      const idx = pdfText.search(/references|bibliography/i);
-      console.log('[refs] "References" found at char:', idx);
-      if (idx >= 0) console.log('[refs] text around it:', JSON.stringify(pdfText.slice(idx, idx + 200)));
+      referencesMap = buildReferencesMap(pdfText);
+      console.log('[refs] regex fallback:', Object.keys(referencesMap).length, 'refs');
     }
-    // GROBID loadGrobidRefs will call makeCitationsClickable() when ready
-  }
-
-  let grobidRefs = [];
-  let citationStyle = null;
-  let grobidCitations = [];
-  let xmlIdToIndex = {};
-  let authorYearLookup = {};
-
-  function applyCitationData(result) {
-    citationStyle = result.style || null;
-    grobidRefs = result.references || [];
-    grobidCitations = result.citations || [];
-
-    referencesMap = {};
-    xmlIdToIndex = {};
-    for (const ref_ of grobidRefs) {
-      referencesMap[ref_.index] = {
-        fullText: `${ref_.firstAuthor} et al. ${ref_.title}. ${ref_.venue} (${ref_.year})`,
-        title: ref_.title,
-        venue: ref_.venue || '',
-        year: ref_.year || '',
-        month: '',
-        firstAuthor: ref_.firstAuthor || '',
-      };
-      if (ref_.xmlId) xmlIdToIndex[ref_.xmlId] = ref_.index;
-    }
-
-    authorYearLookup = {};
-    for (const cite of grobidCitations) {
-      if (!cite.target) continue;
-      const refIndex = xmlIdToIndex[cite.target];
-      if (!refIndex) continue;
-      const m = cite.text.match(/([A-Z][a-z]+).*?((?:19|20)\d{2}[a-z]?)/);
-      if (m) {
-        const key = m[1] + '_' + m[2];
-        authorYearLookup[key] = refIndex;
-        const baseKey = m[1] + '_' + m[2].replace(/[a-z]$/, '');
-        if (!authorYearLookup[baseKey]) authorYearLookup[baseKey] = refIndex;
+    // Build citation occurrences index
+    citationOccurrences = {};
+    for (let p = 0; p < pageTexts.length; p++) {
+      const text = pageTexts[p];
+      const re = /\[([\d,\s–\-]+)\]/g;
+      let cm;
+      while ((cm = re.exec(text)) !== null) {
+        const inner = cm[1];
+        const nums = [];
+        const rangeMatch = inner.match(/(\d+)\s*[-–]\s*(\d+)/);
+        if (rangeMatch) {
+          for (let n = parseInt(rangeMatch[1]); n <= parseInt(rangeMatch[2]); n++) nums.push(n);
+        }
+        for (const d of inner.match(/\d+/g) || []) nums.push(parseInt(d));
+        for (const num of [...new Set(nums)]) {
+          if (!citationOccurrences[num]) citationOccurrences[num] = [];
+          citationOccurrences[num].push({ page: p + 1, charStart: cm.index });
+        }
       }
     }
 
-    // Also populate lookup from bibliography entries directly (catches refs
-    // that GROBID couldn't resolve from inline citations)
-    for (const ref_ of grobidRefs) {
-      if (!ref_.firstAuthor || !ref_.year) continue;
-      const key = ref_.firstAuthor + '_' + ref_.year;
-      if (!authorYearLookup[key]) authorYearLookup[key] = ref_.index;
+    // Re-render citation overlays now that refs are available
+    makeCitationsClickable();
+  }
+
+  let citationStyle = null;
+  let authorYearLookup = {};
+
+  // --- LLM Citation Pipeline ---
+
+  function detectReferencesPages() {
+    let refStart = -1;
+    for (let i = pageTexts.length - 1; i >= 0; i--) {
+      if (/\breferences\b|\bbibliography\b/i.test(pageTexts[i].slice(0, 300))) {
+        refStart = i;
+      }
+    }
+    if (refStart < 0) {
+      for (let i = pageTexts.length - 1; i >= Math.max(0, pageTexts.length - 5); i--) {
+        if (/\breferences\b|\bbibliography\b/i.test(pageTexts[i])) { refStart = i; break; }
+      }
+    }
+    if (refStart < 0) refStart = pageTexts.length;
+    return {
+      refPages: Array.from({ length: pageTexts.length - refStart }, (_, i) => refStart + i),
+      bodyPages: Array.from({ length: refStart }, (_, i) => i),
+    };
+  }
+
+  async function extractReferencesMarkdown(refPages) {
+    if (refPages.length === 0 || !currentPdfPath) return '';
+    // Use pdftotext for clean column-aware extraction
+    try {
+      const firstPage = refPages[0] + 1; // 1-based
+      const lastPage = refPages[refPages.length - 1] + 1;
+      const text = await invoke('extract_pdf_text', { path: currentPdfPath, firstPage, lastPage });
+      return text;
+    } catch (e) {
+      console.warn('[citations] pdftotext failed, falling back to pdf.js text:', e);
+      return refPages.map(p => pageTexts[p] || '').join('\n\n');
+    }
+  }
+
+  function scanBodyCitations(bodyPages) {
+    const keys = new Set();
+    for (const p of bodyPages) {
+      const text = pageTexts[p] || '';
+      // Bracket: [N] or [N, M, ...] or [N-M]
+      const bracketRe = /\[([\d,\s–\-]+)\]/g;
+      let m;
+      while ((m = bracketRe.exec(text)) !== null) {
+        const inner = m[1];
+        // Handle ranges like 14-20
+        const rangeMatch = inner.match(/(\d+)\s*[-–]\s*(\d+)/);
+        if (rangeMatch) {
+          const start = parseInt(rangeMatch[1]), end = parseInt(rangeMatch[2]);
+          for (let n = start; n <= end; n++) keys.add(String(n));
+        }
+        // Handle individual numbers and comma-separated
+        for (const d of inner.match(/\d+/g) || []) keys.add(d);
+      }
+      // Parenthetical: (Author et al., Year) or (Author, Year)
+      const parenRe = /\(([A-Z][a-z]+)(?:\s+et\s+al\.?)?,?\s*((?:19|20)\d{2}[a-z]?)\)/g;
+      while ((m = parenRe.exec(text)) !== null) keys.add(m[1] + '_' + m[2].replace(/[a-z]$/, ''));
+    }
+    // Detect style
+    const numKeys = [...keys].filter(k => /^\d+$/.test(k));
+    const authorKeys = [...keys].filter(k => /_/.test(k));
+    citationStyle = numKeys.length >= authorKeys.length ? 'bracket' : 'parenthetical';
+    return [...keys];
+  }
+
+  function getLlmSettings() {
+    try {
+      const s = JSON.parse(localStorage.getItem('llm_settings') || '{}');
+      return {
+        url: s.url || 'http://localhost:8317/v1',
+        key: s.key || '123',
+        model: s.model || 'claude-sonnet-4-6',
+      };
+    } catch { return { url: 'http://localhost:8317/v1', key: '123', model: 'claude-sonnet-4-6' }; }
+  }
+
+  async function renderPageToImage(pageNum) {
+    const page = await currentPdf.getPage(pageNum);
+    const scale = 2.0;
+    const viewport = page.getViewport({ scale });
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = viewport.width;
+    offCanvas.height = viewport.height;
+    const offCtx = offCanvas.getContext('2d');
+    await page.render({ canvasContext: offCtx, viewport }).promise;
+    return offCanvas.toDataURL('image/png').split(',')[1];
+  }
+
+  async function mapCitationsViaLLM(refPages, citationKeys) {
+    const settings = getLlmSettings();
+
+    // Render reference pages to images
+    const images = [];
+    for (const p of refPages) {
+      try {
+        const b64 = await renderPageToImage(p + 1); // 1-based
+        images.push(b64);
+      } catch (e) {
+        console.warn('[citations] failed to render page', p + 1, e);
+      }
     }
 
-    refsRawText = grobidRefs.map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
-    console.log('[grobid] style:', citationStyle, 'refs:', Object.keys(referencesMap).length, 'authorYearLookup:', Object.keys(authorYearLookup).length);
-    renderPage();
+    const userContent = [];
+
+    // Add images (OpenAI vision format)
+    for (const b64 of images) {
+      userContent.push({
+        type: 'image_url',
+        image_url: { url: `data:image/png;base64,${b64}` },
+      });
+    }
+
+    // Add text prompt
+    userContent.push({
+      type: 'text',
+      text: `The images above show the References/Bibliography section of a research paper. Extract each numbered reference and map it to the citation keys below.
+
+## Citation keys found in paper body:
+${citationKeys.join(', ')}
+
+## Instructions:
+Return a JSON object where each citation key maps to:
+{"title": "full paper title", "venue": "journal or conference name", "year": "publication year", "firstAuthor": "surname of first author"}
+
+For numeric keys like "1", "2", match to the corresponding numbered reference [1], [2] in the images.
+For author-year keys like "Smith_2020", match by author surname and year.
+If a key cannot be matched, set all fields to empty strings.
+Output ONLY valid JSON, no markdown fences, no commentary.`,
+    });
+
+    console.log('[citations] sending', images.length, 'images + prompt to LLM, image sizes:', images.map(b => Math.round(b.length / 1024) + 'KB'));
+
+    const messages = [
+      { role: 'system', content: 'You output only valid JSON. No markdown, no explanation.' },
+      { role: 'user', content: userContent },
+    ];
+    console.log('[citations] message content types:', userContent.map(c => c.type));
+
+    const resp = await invoke('send_chat_message', {
+      messages,
+      model: settings.model,
+      apiUrl: settings.url,
+      apiKey: settings.key,
+    });
+
+    // Parse response — extract JSON from potentially chatty response
+    let cleaned = resp.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    // Find the first { and last } to extract just the JSON object
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    }
+    try {
+      return JSON.parse(cleaned);
+    } catch (e) {
+      console.error('[citations] LLM response (failed to parse):', resp.slice(0, 500));
+      throw e;
+    }
+  }
+
+  function applyCitationMap(parsedMap) {
+    referencesMap = {};
+    authorYearLookup = {};
+    for (const [key, val] of Object.entries(parsedMap)) {
+      const numKey = parseInt(key);
+      const mapKey = isNaN(numKey) ? key : numKey;
+      const hasData = val.title && val.title.length > 0;
+      referencesMap[mapKey] = {
+        fullText: hasData ? `${val.firstAuthor} et al. ${val.title}. ${val.venue} (${val.year})` : '',
+        title: val.title || '',
+        venue: val.venue || '',
+        year: val.year || '',
+        month: '',
+        firstAuthor: val.firstAuthor || '',
+        split: false,
+        confidence: hasData ? 'high' : 'unmatched',
+      };
+      if (val.firstAuthor && val.year) {
+        const aKey = val.firstAuthor + '_' + val.year;
+        if (!authorYearLookup[aKey]) authorYearLookup[aKey] = mapKey;
+      }
+    }
+    refsRawText = Object.values(referencesMap).map(r => `${r.firstAuthor}, ${r.year}. ${r.title}. ${r.venue}`).join(' ');
   }
 
   const citeBtnEl = document.getElementById('btn-refresh-citations');
+  document.getElementById('btn-goto-refs').addEventListener('click', () => goToReference(0));
 
   function setCiteLoading(loading) {
     citeBtnEl.classList.toggle('loading', loading);
     citeBtnEl.disabled = loading;
   }
 
-  async function loadGrobidRefs(pdfPath) {
+  async function loadCitationPipeline(pdfPath) {
+    // Try cache first
     try {
       const cached = await invoke('load_citations', { pdfPath });
       if (cached) {
-        applyCitationData(JSON.parse(cached));
+        const data = JSON.parse(cached);
+        if (data.version === 2 && data.parsedMap) {
+          citationStyle = data.citationStyle || 'bracket';
+          applyCitationMap(data.parsedMap);
+          console.log('[citations] loaded from cache:', Object.keys(referencesMap).length, 'refs');
+          renderPage();
+          return;
+        }
+      }
+    } catch {}
+
+    await runCitationPipeline(pdfPath, false);
+  }
+
+  async function runCitationPipeline(pdfPath, isRefresh) {
+    if (!pdfText || pageTexts.length === 0) return;
+    setCiteLoading(true);
+    try {
+      const { refPages, bodyPages } = detectReferencesPages();
+      const citationKeys = scanBodyCitations(bodyPages);
+
+      console.log('[citations] detected', refPages.length, 'ref pages,', citationKeys.length, 'citation keys, style:', citationStyle);
+
+      if (citationKeys.length === 0) {
+        console.log('[citations] no citations found');
         return;
       }
 
-      setCiteLoading(true);
-      const result = await invoke('parse_references_grobid', { pdfPath });
-      applyCitationData(result);
+      console.log('[citations] rendering ref page images for vision LLM...');
+      const parsedMap = await mapCitationsViaLLM(refPages, citationKeys);
+      applyCitationMap(parsedMap);
+
+      console.log('[citations] LLM mapped', Object.keys(referencesMap).length, 'refs');
+
+      // Cache
+      const cacheData = {
+        version: 2,
+        citationKeys,
+        parsedMap,
+        citationStyle,
+        timestamp: new Date().toISOString(),
+      };
       try {
-        await invoke('save_citations', { pdfPath, data: JSON.stringify(result) });
-      } catch (e) {
-        console.warn('[grobid] Failed to cache citations:', e);
-      }
+        await invoke('save_citations', { pdfPath, data: JSON.stringify(cacheData) });
+      } catch {}
+
+      renderPage();
     } catch (e) {
-      console.warn('[grobid] Failed, falling back to regex parsing:', e);
+      console.error('[citations] pipeline failed:', e);
+      // Fallback to regex
+      referencesMap = buildReferencesMap(pdfText);
+      renderPage();
     } finally {
       setCiteLoading(false);
     }
   }
 
-  async function refreshCitations() {
-    if (!currentPdfPath) return;
-    setCiteLoading(true);
-    try {
-      const result = await invoke('parse_references_grobid', { pdfPath: currentPdfPath });
-      applyCitationData(result);
-      await invoke('save_citations', { pdfPath: currentPdfPath, data: JSON.stringify(result) });
-    } catch (e) {
-      console.error('[grobid] Refresh failed:', e);
-    } finally {
-      setCiteLoading(false);
-    }
-  }
-
-  citeBtnEl.addEventListener('click', () => refreshCitations());
+  citeBtnEl.addEventListener('click', () => {
+    if (currentPdfPath) runCitationPipeline(currentPdfPath, true);
+  });
 
   // --- OCR button ---
   const ocrBtnEl = document.getElementById('btn-ocr');
@@ -700,19 +1010,70 @@ export function initPdfViewer() {
   function buildReferencesMap(text) {
     const map = {};
     if (!text) return map;
-    // Use the LAST occurrence of "References" to avoid matching section headers earlier in the paper
     const lastIdx = Math.max(text.lastIndexOf('References'), text.lastIndexOf('REFERENCES'), text.lastIndexOf('Bibliography'));
     if (lastIdx < 0) return map;
     const sec = text.slice(lastIdx).replace(/^(?:References|REFERENCES|Bibliography)\s*/, '');
 
-    // Format 1: [number] text
-    const bracketRe = /\[\s*(\d+)\s*\]\s*([\s\S]*?)(?=\[\s*\d+\s*\]|$)/g;
+    // Format 1: [N] — find each reference number independently
+    const bracketPositions = [];
+    const bracketFindRe = /\[\s*(\d+)\s*\]/g;
     let m;
-    while ((m = bracketRe.exec(sec)) !== null) {
-      const fullText = m[2].replace(/\s+/g, ' ').trim();
-      map[parseInt(m[1])] = { fullText, ...parseReference(fullText) };
+    while ((m = bracketFindRe.exec(sec)) !== null) {
+      const num = parseInt(m[1]);
+      if (num < 1 || num > 999) continue;
+      bracketPositions.push({ num, start: m.index, textStart: m.index + m[0].length });
     }
-    if (Object.keys(map).length > 0) return map;
+
+    if (bracketPositions.length > 0) {
+      // Sort by reference number to handle column interleaving
+      bracketPositions.sort((a, b) => a.num - b.num);
+
+      // Deduplicate: if same number appears multiple times, keep the one whose text looks like a reference
+      const byNum = {};
+      for (const pos of bracketPositions) {
+        if (!byNum[pos.num]) byNum[pos.num] = [];
+        byNum[pos.num].push(pos);
+      }
+
+      // Sort by text position to find what comes next in raw text
+      const byPosition = [...bracketPositions].sort((a, b) => a.start - b.start);
+
+      for (let i = 0; i < byPosition.length; i++) {
+        const pos = byPosition[i];
+        const endPos = (i + 1 < byPosition.length) ? byPosition[i + 1].start : sec.length;
+        const fullText = sec.slice(pos.textStart, endPos).replace(/\s+/g, ' ').trim();
+
+        if (fullText.length < 10) continue;
+
+        // If this number already has an entry, pick the one that looks more like a real reference
+        if (map[pos.num]) {
+          const hasYear = /\b(19|20)\d{2}\b/.test(fullText);
+          const oldHasYear = /\b(19|20)\d{2}\b/.test(map[pos.num].fullText);
+          // Keep the one with a year, or the longer one
+          if (oldHasYear && !hasYear) continue;
+          if (oldHasYear === hasYear && map[pos.num].fullText.length >= fullText.length) continue;
+        }
+
+        map[pos.num] = { fullText, ...parseReference(fullText) };
+      }
+
+      // Fix column-wrap gaps: if [N] is missing but [N-1] and [N+1] exist,
+      // [N] likely got merged into [N-1]'s text due to column wrapping
+      const nums = Object.keys(map).map(Number).sort((a, b) => a - b);
+      const maxNum = nums[nums.length - 1] || 0;
+      for (let n = 1; n <= maxNum; n++) {
+        if (map[n]) continue;
+        // [N] is missing — check if the text after [N-1] in the refs section contains [N]'s content
+        // Try to find [N] directly in the full refs text
+        const directRe = new RegExp('\\[\\s*' + n + '\\s*\\]\\s*(.{10,500}?)(?=\\[\\s*\\d+\\s*\\]|$)');
+        const directMatch = sec.match(directRe);
+        if (directMatch) {
+          const fullText = directMatch[1].replace(/\s+/g, ' ').trim();
+          map[n] = { fullText, ...parseReference(fullText) };
+        }
+      }
+      return map;
+    }
 
     // Format 2: "1. Author text" — skip if text looks like section heading
     const dotRe = /(?:^|\s)(\d+)\.\s+([\s\S]*?)(?=(?:^|\s)\d+\.\s|$)/g;
@@ -837,7 +1198,7 @@ export function initPdfViewer() {
           if (rm) { for (let n = parseInt(rm[1]); n <= parseInt(rm[2]); n++) nums.push(n); }
           else { const n = parseInt(part); if (!isNaN(n)) nums.push(n); }
         }
-        const valid = nums.filter(n => referencesMap[n]);
+        const valid = nums.filter(n => n > 0);
         if (valid.length === 0) continue;
 
         const mStart = bm.index + 1, mEnd = bm.index + bm[0].length - 1;
@@ -876,16 +1237,20 @@ export function initPdfViewer() {
   }
 
   function setupCiteOverlay(el, refNum) {
-    const refs = (el.dataset.refs || String(refNum)).split(',').map(Number).filter(n => referencesMap[n]);
+    const refs = (el.dataset.refs || String(refNum)).split(',').map(Number).filter(n => n > 0);
     if (refs.length === 0) return;
 
     function refDisplay(n) {
       const r = referencesMap[n];
-      if (!r) return { title: '', disp: '', url: '' };
+      if (!r) return { title: '', disp: '(unknown)', url: '', split: false, confidence: 'unmatched' };
+      if (r.confidence === 'unmatched' || !r.title) {
+        return { title: '', disp: '(unmatched)', url: '', split: false, confidence: 'unmatched' };
+      }
       const venue = r.venue || '';
       const year = r.year || '';
       const tag = venue || year ? ` (${[venue, year].filter(Boolean).join(', ')})` : '';
-      return { title: r.title, disp: r.title + tag, url: 'https://scholar.google.com/scholar?q=' + encodeURIComponent(r.title) };
+      const splitTag = r.split ? '(split) ' : '';
+      return { title: r.title, disp: splitTag + r.title + tag, url: 'https://scholar.google.com/scholar?q=' + encodeURIComponent(r.title), split: !!r.split, confidence: r.confidence || 'medium' };
     }
 
     let popup = null;
@@ -900,7 +1265,33 @@ export function initPdfViewer() {
         const d = refDisplay(n);
         const row = document.createElement('div');
         row.className = 'cite-popup-row';
-        row.innerHTML = `<div class="cite-popup-title">[${n}] ${d.disp}</div><a class="cite-popup-link" href="${d.url}">Google Scholar ↗</a>`;
+        const confBadge = d.confidence === 'high' ? '<span class="cite-conf cite-conf-high">✓</span>'
+          : d.confidence === 'unmatched' ? '<span class="cite-conf cite-conf-low">?</span>'
+          : d.confidence === 'low' ? '<span class="cite-conf cite-conf-low">⚠</span>'
+          : '<span class="cite-conf cite-conf-med">~</span>';
+        const googleLink = d.url ? `<a class="cite-popup-link" href="${d.url}">Google Scholar ↗</a>` : '';
+        row.innerHTML = `<div class="cite-popup-title">${confBadge} [${n}] ${d.disp}</div>${googleLink}`;
+
+        const occs = citationOccurrences[n] || [];
+        if (occs.length > 0) {
+          const navRow = document.createElement('div');
+          navRow.className = 'cite-popup-nav';
+          for (let oi = 0; oi < occs.length; oi++) {
+            const btn = document.createElement('button');
+            btn.className = 'cite-popup-goto';
+            btn.textContent = `p${occs[oi].page}`;
+            btn.title = `Occurrence ${oi + 1} on page ${occs[oi].page}`;
+            const idx = oi;
+            btn.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              goToOccurrence(n, idx);
+              if (popup) { popup.remove(); popup = null; }
+            });
+            navRow.appendChild(btn);
+          }
+          row.appendChild(navRow);
+        }
+
         popup.appendChild(row);
       }
       popup.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
@@ -924,40 +1315,70 @@ export function initPdfViewer() {
       if (onCitationChat) {
         const lines = refs.map(n => {
           const d = refDisplay(n);
-          return `**${d.disp}**\n\n[Google Scholar ↗](${d.url})`;
+          if (d.confidence === 'unmatched') return `**[${n}]** (unmatched)`;
+          const link = d.url ? `\n\n[Google Scholar ↗](${d.url})` : '';
+          return `**[${n}]** ${d.disp}${link}`;
         });
         const md = lines.join('\n\n---\n\n');
-        const firstUrl = refDisplay(refs[0]).url;
-        onCitationChat(refs[0], md, firstUrl);
+        const occData = {};
+        for (const n of refs) occData[n] = citationOccurrences[n] || [];
+        onCitationChat(refs, md, occData);
       }
     });
   }
 
-  function goToReference(refNum) {
-    if (pageTexts.length === 0) return;
-    // Search from last page backwards for the reference
-    const patterns = [
-      new RegExp(`\\[${refNum}\\]`),
-      new RegExp(`(?:^|\\s)${refNum}\\.\\s`),
-    ];
+  let pendingScrollCitation = null;
 
-    for (let i = pageTexts.length - 1; i >= 0; i--) {
-      const text = pageTexts[i];
-      // Only look in pages that have a "References" or "Bibliography" section
-      if (!/references|bibliography/i.test(text) && i < pageTexts.length - 3) continue;
-      for (const pattern of patterns) {
-        if (pattern.test(text)) {
-          const targetPage = i + 1; // 1-based
-          pendingHighlight = refNum;
-          if (currentPage === targetPage) {
-            highlightReferenceText(refNum);
-            pendingHighlight = null;
-          } else {
-            currentPage = targetPage;
-            renderPage();
-          }
+  function goToOccurrence(refNum, occIdx) {
+    const occs = citationOccurrences[refNum];
+    if (!occs || !occs[occIdx]) return;
+    const occ = occs[occIdx];
+    pendingScrollCitation = { refNum, charStart: occ.charStart };
+    if (occ.page !== currentPage) {
+      currentPage = occ.page;
+      renderPage();
+    } else {
+      scrollToCitation(refNum, occ.charStart);
+    }
+  }
+
+  function scrollToCitation(refNum, charStart) {
+    const spans = textLayerDiv.querySelectorAll('span');
+    const target = `[${refNum}]`;
+    let offset = 0;
+    for (const span of spans) {
+      const text = span.textContent;
+      const idx = text.indexOf(target);
+      if (idx >= 0) {
+        // Check if this is roughly the right occurrence by char position
+        if (Math.abs(offset + idx - charStart) < 200 || charStart === undefined) {
+          const rect = span.getBoundingClientRect();
+          const containerRect = pdfContainer.getBoundingClientRect();
+          pdfContainer.scrollTo({
+            top: pdfContainer.scrollTop + (rect.top - containerRect.top) - containerRect.height / 2,
+            behavior: 'smooth'
+          });
+          // Brief highlight
+          span.classList.add('search-highlight-active');
+          setTimeout(() => span.classList.remove('search-highlight-active'), 2000);
           return;
         }
+      }
+      offset += text.length;
+    }
+  }
+
+  function goToReference(refNum) {
+    if (pageTexts.length === 0) return;
+    for (let i = 0; i < pageTexts.length; i++) {
+      if (/references|bibliography/i.test(pageTexts[i])) {
+        const targetPage = i + 1;
+        if (currentPage !== targetPage) {
+          currentPage = targetPage;
+          renderPage();
+        }
+        pdfContainer.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
       }
     }
   }
@@ -1207,6 +1628,8 @@ export function initPdfViewer() {
     getCurrentPage: () => currentPage,
     getSelectionPosition,
     getSavedPosition: () => savedPosition,
+    goToReference,
+    goToOccurrence,
     setStamps,
     setOnStampClick: (cb) => { onStampClick = cb; },
     setOnStampDelete: (cb) => { onStampDelete = cb; },
