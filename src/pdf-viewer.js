@@ -410,6 +410,9 @@ export function initPdfViewer() {
     currentPdfPath = filePath;
     currentPage = 1;
     pdfText = null;
+    pageTexts = [];
+    referencesMap = {};
+    citationOccurrences = {};
 
     document.getElementById('current-pdf-name').textContent = fileName || filePath.split('/').pop();
 
@@ -491,6 +494,10 @@ export function initPdfViewer() {
         if (pendingScrollCitation) {
           scrollToCitation(pendingScrollCitation.refNum, pendingScrollCitation.charStart);
           pendingScrollCitation = null;
+        }
+        if (pendingScrollToRefs) {
+          scrollToRefsHeading();
+          pendingScrollToRefs = false;
         }
       } catch (textErr) {
         console.error('TextLayer error:', textErr);
@@ -574,9 +581,10 @@ export function initPdfViewer() {
     citationOccurrences = {};
     for (let p = 0; p < pageTexts.length; p++) {
       const text = pageTexts[p];
-      const re = /\[([\d,\s–\-]+)\]/g;
+      // Numeric bracket occurrences: [N], [N,M], [N-M]
+      const numRe = /\[([\d,\s–\-]+)\]/g;
       let cm;
-      while ((cm = re.exec(text)) !== null) {
+      while ((cm = numRe.exec(text)) !== null) {
         const inner = cm[1];
         const nums = [];
         const rangeMatch = inner.match(/(\d+)\s*[-–]\s*(\d+)/);
@@ -587,6 +595,18 @@ export function initPdfViewer() {
         for (const num of [...new Set(nums)]) {
           if (!citationOccurrences[num]) citationOccurrences[num] = [];
           citationOccurrences[num].push({ page: p + 1, charStart: cm.index });
+        }
+      }
+      // Author-year occurrences: (Author, Year) or [Author, Year]
+      const ayRe = /[\[(]([^)\]]{3,300})[\])]/g;
+      while ((cm = ayRe.exec(text)) !== null) {
+        for (const part of cm[1].split(/;/)) {
+          const am = part.match(/([A-Z][a-z]+)(?:\s+(?:et\s+al\.?|and\s+[A-Z][a-z]+|&\s+[A-Z][a-z]+))?[.,]?\s*((?:19|20)\d{2})[a-z]?/);
+          if (am) {
+            const key = am[1] + '_' + am[2];
+            if (!citationOccurrences[key]) citationOccurrences[key] = [];
+            citationOccurrences[key].push({ page: p + 1, charStart: cm.index });
+          }
         }
       }
     }
@@ -602,15 +622,10 @@ export function initPdfViewer() {
 
   function detectReferencesPages() {
     let refStart = -1;
+    // Search backward for the page containing the references heading
+    // (space/letter-spacing tolerant, since pdf.js may split heading chars)
     for (let i = pageTexts.length - 1; i >= 0; i--) {
-      if (/\breferences\b|\bbibliography\b/i.test(pageTexts[i].slice(0, 300))) {
-        refStart = i;
-      }
-    }
-    if (refStart < 0) {
-      for (let i = pageTexts.length - 1; i >= Math.max(0, pageTexts.length - 5); i--) {
-        if (/\breferences\b|\bbibliography\b/i.test(pageTexts[i])) { refStart = i; break; }
-      }
+      if (pageHasRefsHeading(pageTexts[i])) { refStart = i; break; }
     }
     if (refStart < 0) refStart = pageTexts.length;
     return {
@@ -634,31 +649,58 @@ export function initPdfViewer() {
   }
 
   function scanBodyCitations(bodyPages) {
+    const fullBody = bodyPages.map(p => pageTexts[p] || '').join('\n');
+
+    // --- Ternary classification by counting matches of each style ---
+    // bracket: [N] / [N, M] / [N-M]  (digits only inside brackets)
+    const bracketNumRe = /\[\s*\d+(?:\s*[,\s–\-]\s*\d+)*\s*\]/g;
+    // bracket-author: [Author ... Year]  (letters AND a year inside brackets)
+    const bracketAuthorRe = /\[[^\]]*[A-Za-z][^\]]*(?:19|20)\d{2}[^\]]*\]/g;
+    // parenthetical: (Author ... Year)  (letters AND a year inside parens)
+    const parenRe = /\([^)]*[A-Za-z][^)]*(?:19|20)\d{2}[^)]*\)/g;
+
+    const bracketNumCount = (fullBody.match(bracketNumRe) || []).length;
+    const bracketAuthorCount = (fullBody.match(bracketAuthorRe) || []).length;
+    const parenCount = (fullBody.match(parenRe) || []).length;
+
+    if (bracketNumCount >= bracketAuthorCount && bracketNumCount >= parenCount && bracketNumCount > 0) {
+      citationStyle = 'bracket';
+    } else if (bracketAuthorCount >= parenCount && bracketAuthorCount > 0) {
+      citationStyle = 'bracket-author';
+    } else {
+      citationStyle = 'parenthetical';
+    }
+
     const keys = new Set();
-    for (const p of bodyPages) {
-      const text = pageTexts[p] || '';
-      // Bracket: [N] or [N, M, ...] or [N-M]
-      const bracketRe = /\[([\d,\s–\-]+)\]/g;
+
+    if (citationStyle === 'bracket') {
+      // Numeric keys: [N], [N,M], [N-M]
+      const re = /\[([\d,\s–\-]+)\]/g;
       let m;
-      while ((m = bracketRe.exec(text)) !== null) {
+      while ((m = re.exec(fullBody)) !== null) {
         const inner = m[1];
-        // Handle ranges like 14-20
         const rangeMatch = inner.match(/(\d+)\s*[-–]\s*(\d+)/);
         if (rangeMatch) {
-          const start = parseInt(rangeMatch[1]), end = parseInt(rangeMatch[2]);
-          for (let n = start; n <= end; n++) keys.add(String(n));
+          for (let n = parseInt(rangeMatch[1]); n <= parseInt(rangeMatch[2]); n++) keys.add(String(n));
         }
-        // Handle individual numbers and comma-separated
         for (const d of inner.match(/\d+/g) || []) keys.add(d);
       }
-      // Parenthetical: (Author et al., Year) or (Author, Year)
-      const parenRe = /\(([A-Z][a-z]+)(?:\s+et\s+al\.?)?,?\s*((?:19|20)\d{2}[a-z]?)\)/g;
-      while ((m = parenRe.exec(text)) !== null) keys.add(m[1] + '_' + m[2].replace(/[a-z]$/, ''));
+    } else {
+      // Author-year keys: extract Author + Year from either [...] or (...)
+      const wrapRe = citationStyle === 'bracket-author'
+        ? /\[([^\]]{3,300})\]/g
+        : /\(([^)]{3,300})\)/g;
+      let m;
+      while ((m = wrapRe.exec(fullBody)) !== null) {
+        const inner = m[1];
+        // Split multi-citations by ; and extract each Author, Year
+        for (const part of inner.split(/;/)) {
+          const cm = part.match(/([A-Z][a-z]+)(?:\s+(?:et\s+al\.?|and\s+[A-Z][a-z]+|&\s+[A-Z][a-z]+))?[.,]?\s*((?:19|20)\d{2})[a-z]?/);
+          if (cm) keys.add(cm[1] + '_' + cm[2]);
+        }
+      }
     }
-    // Detect style
-    const numKeys = [...keys].filter(k => /^\d+$/.test(k));
-    const authorKeys = [...keys].filter(k => /_/.test(k));
-    citationStyle = numKeys.length >= authorKeys.length ? 'bracket' : 'parenthetical';
+
     return [...keys];
   }
 
@@ -1144,7 +1186,9 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
               if (k.startsWith(prefix + '_' + yearBase)) { refIndex = v; break; }
             }
           }
-          if (!refIndex || !referencesMap[refIndex]) continue;
+          // Always create an overlay; if lookup failed use the surname_year key
+          // so the popup shows (unmatched) rather than nothing appearing.
+          if (!refIndex) refIndex = surname + '_' + yearBase;
 
           const partIdx = fullText.indexOf(trimmed, parenStart);
           if (partIdx < 0) continue;
@@ -1237,7 +1281,11 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
   }
 
   function setupCiteOverlay(el, refNum) {
-    const refs = (el.dataset.refs || String(refNum)).split(',').map(Number).filter(n => n > 0);
+    // Keys may be numeric ("15") or author-year strings ("Smith_2020")
+    const refs = (el.dataset.refs || String(refNum)).split(',')
+      .map(s => s.trim())
+      .map(s => /^\d+$/.test(s) ? parseInt(s) : s)
+      .filter(n => (typeof n === 'number' && n > 0) || (typeof n === 'string' && n.length > 0));
     if (refs.length === 0) return;
 
     function refDisplay(n) {
@@ -1368,19 +1416,72 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
     }
   }
 
+  let pendingScrollToRefs = false;
+
+  function pageHasRefsHeading(text) {
+    // Collapse all whitespace so letter-spaced headings ("R E F E R E N C E S")
+    // and normal ones both become "References[1]..." / "Bibliography...".
+    const collapsed = text.replace(/\s+/g, '');
+    const re = /references|bibliography/gi;
+    let m, sawWord = false;
+    while ((m = re.exec(collapsed)) !== null) {
+      sawWord = true;
+      const after = collapsed[m.index + m[0].length] || '';
+      // Real heading is followed by a reference marker: "[" or "(" (open bracket,
+      // sometimes mis-rendered), a digit, or an uppercase author initial.
+      // Body mentions are followed by a lowercase letter.
+      if (after === '[' || after === '(' || /[0-9A-Z]/.test(after)) return true;
+    }
+    // Fallback for OCR'd multi-column papers: pdf.js reading order can place a
+    // column's wrapped continuation text right after the heading word (e.g.
+    // "References" -> "telligent driving..."), so the char-after heuristic above
+    // sees a lowercase letter and bails. Confirm via a dense run of
+    // reference-entry markers ([1], (30], (12)) on the same page as the word.
+    if (sawWord) {
+      const markers = (text.match(/[\[(]\s*\d{1,3}\s*[\])]/g) || []).length;
+      if (markers >= 5) return true;
+    }
+    return false;
+  }
+
   function goToReference(refNum) {
-    if (pageTexts.length === 0) return;
-    for (let i = 0; i < pageTexts.length; i++) {
-      if (/references|bibliography/i.test(pageTexts[i])) {
-        const targetPage = i + 1;
-        if (currentPage !== targetPage) {
-          currentPage = targetPage;
-          renderPage();
-        }
-        pdfContainer.scrollTo({ top: 0, behavior: 'smooth' });
+    if (pageTexts.length === 0) { console.warn('[ref] no pageTexts'); return; }
+    // Only scan within the actual page count (pageTexts may briefly hold stale
+    // entries from a previously-open PDF until extractAllText repopulates).
+    const limit = Math.min(pageTexts.length, totalPages || pageTexts.length);
+    let target = -1;
+    for (let i = limit - 1; i >= 0; i--) {
+      if (pageHasRefsHeading(pageTexts[i])) { target = i; break; }
+    }
+    console.log('[ref] target page:', target + 1, 'of', limit, 'pageTexts:', pageTexts.length, 'totalPages:', totalPages);
+    if (target < 0) return;
+    const targetPage = target + 1;
+    if (currentPage !== targetPage) {
+      pendingScrollToRefs = true;
+      currentPage = targetPage;
+      renderPage();
+    } else {
+      scrollToRefsHeading();
+    }
+  }
+
+  function scrollToRefsHeading() {
+    const spans = textLayerDiv.querySelectorAll('span');
+    // Match a span that is or starts with the heading word (letter-spacing tolerant)
+    for (const span of spans) {
+      const collapsed = span.textContent.replace(/\s+/g, '');
+      if (/^(References|REFERENCES|Bibliography|BIBLIOGRAPHY)/i.test(collapsed) && collapsed.length < 30) {
+        const rect = span.getBoundingClientRect();
+        const containerRect = pdfContainer.getBoundingClientRect();
+        pdfContainer.scrollTo({
+          top: pdfContainer.scrollTop + (rect.top - containerRect.top) - 20,
+          behavior: 'smooth',
+        });
         return;
       }
     }
+    console.warn('[ref] heading span not found on page, scrolling to top');
+    pdfContainer.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function highlightReferenceText(refNum) {
