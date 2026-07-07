@@ -621,12 +621,9 @@ export function initPdfViewer() {
   // --- LLM Citation Pipeline ---
 
   function detectReferencesPages() {
-    let refStart = -1;
     // Search backward for the page containing the references heading
     // (space/letter-spacing tolerant, since pdf.js may split heading chars)
-    for (let i = pageTexts.length - 1; i >= 0; i--) {
-      if (pageHasRefsHeading(pageTexts[i])) { refStart = i; break; }
-    }
+    let refStart = findRefsHeadingPage(pageTexts.length);
     if (refStart < 0) refStart = pageTexts.length;
     return {
       refPages: Array.from({ length: pageTexts.length - refStart }, (_, i) => refStart + i),
@@ -1418,30 +1415,51 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
 
   let pendingScrollToRefs = false;
 
-  function pageHasRefsHeading(text) {
+  // Returns 2 (strong), 1 (weak), or 0 (no match). Strong = a capitalized
+  // heading word ("References"/"REFERENCES") followed by a reference marker.
+  // Weak = the older, looser heuristics kept for papers where extraction
+  // mangles case or reading order; they can also fire on body/appendix pages
+  // (e.g. an appendix prompt that mentions "references" near [1]-style
+  // markers), so a strong match anywhere must win over a weak one.
+  function refsHeadingStrength(text) {
     // Collapse all whitespace so letter-spaced headings ("R E F E R E N C E S")
     // and normal ones both become "References[1]..." / "Bibliography...".
     const collapsed = text.replace(/\s+/g, '');
     const re = /references|bibliography/gi;
-    let m, sawWord = false;
+    let m, sawWord = false, strength = 0;
     while ((m = re.exec(collapsed)) !== null) {
       sawWord = true;
       const after = collapsed[m.index + m[0].length] || '';
       // Real heading is followed by a reference marker: "[" or "(" (open bracket,
       // sometimes mis-rendered), a digit, or an uppercase author initial.
       // Body mentions are followed by a lowercase letter.
-      if (after === '[' || after === '(' || /[0-9A-Z]/.test(after)) return true;
+      if (after === '[' || after === '(' || /[0-9A-Z]/.test(after)) {
+        if (/^[A-Z]/.test(m[0])) return 2;
+        strength = 1;
+      }
     }
     // Fallback for OCR'd multi-column papers: pdf.js reading order can place a
     // column's wrapped continuation text right after the heading word (e.g.
     // "References" -> "telligent driving..."), so the char-after heuristic above
     // sees a lowercase letter and bails. Confirm via a dense run of
     // reference-entry markers ([1], (30], (12)) on the same page as the word.
-    if (sawWord) {
+    if (sawWord && strength === 0) {
       const markers = (text.match(/[\[(]\s*\d{1,3}\s*[\])]/g) || []).length;
-      if (markers >= 5) return true;
+      if (markers >= 5) strength = 1;
     }
-    return false;
+    return strength;
+  }
+
+  // Backward-scan for the references heading page: latest strong match wins;
+  // weak matches are only used when no page matches strongly.
+  function findRefsHeadingPage(limit) {
+    let weak = -1;
+    for (let i = limit - 1; i >= 0; i--) {
+      const s = refsHeadingStrength(pageTexts[i] || '');
+      if (s === 2) return i;
+      if (s === 1 && weak < 0) weak = i;
+    }
+    return weak;
   }
 
   function goToReference(refNum) {
@@ -1449,10 +1467,7 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
     // Only scan within the actual page count (pageTexts may briefly hold stale
     // entries from a previously-open PDF until extractAllText repopulates).
     const limit = Math.min(pageTexts.length, totalPages || pageTexts.length);
-    let target = -1;
-    for (let i = limit - 1; i >= 0; i--) {
-      if (pageHasRefsHeading(pageTexts[i])) { target = i; break; }
-    }
+    const target = findRefsHeadingPage(limit);
     console.log('[ref] target page:', target + 1, 'of', limit, 'pageTexts:', pageTexts.length, 'totalPages:', totalPages);
     if (target < 0) return;
     const targetPage = target + 1;
