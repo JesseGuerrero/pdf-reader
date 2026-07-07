@@ -1230,7 +1230,9 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
       // only, with no spaces around brackets so cross-font [N] concatenates).
       // Create overlay divs positioned via range rects.
       const pad = 2;
-      const bracketRe = /\[(\d+(?:[,\s–—-]+\d+)*)\]/g;
+      // Whitespace-tolerant: the span join above can insert spaces inside a
+      // citation split across spans ("[ 72 , 90 ]").
+      const bracketRe = /\[\s*(\d+(?:[,\s–—-]+\d+)*)\s*\]/g;
       let bm;
       while ((bm = bracketRe.exec(fullText)) !== null) {
         const nums = [];
