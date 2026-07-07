@@ -12,3 +12,4 @@ wheels/
 # Tauri
 src-tauri/target/
 node_modules/
+dist/

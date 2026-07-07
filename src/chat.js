@@ -22,9 +22,13 @@ const DEFAULTS = {
   url: 'http://localhost:8317/v1',
   key: '123',
   model: 'claude-sonnet-4-6',
+  s2Key: '',
 };
 
-const S2_API_KEY = 'REDACTED';
+// Semantic Scholar API key, configured in the settings panel.
+function getS2ApiKey() {
+  return (loadSettings().s2Key || '').trim();
+}
 
 // --- Chat Tree ---
 
@@ -141,6 +145,7 @@ export function initChat(pdfViewer) {
   const settingUrl = document.getElementById('setting-url');
   const settingKey = document.getElementById('setting-key');
   const settingModel = document.getElementById('setting-model');
+  const settingS2Key = document.getElementById('setting-s2-key');
   const selectedBar = document.getElementById('selected-text-bar');
   const selectedContent = document.getElementById('selected-text-content');
   const defineBtn = document.getElementById('btn-define');
@@ -173,15 +178,17 @@ export function initChat(pdfViewer) {
   settingUrl.value = settings.url;
   settingKey.value = settings.key;
   settingModel.value = settings.model;
+  settingS2Key.value = settings.s2Key;
 
   settingsBtn.addEventListener('click', () => settingsPanel.classList.toggle('open'));
 
-  for (const input of [settingUrl, settingKey, settingModel]) {
+  for (const input of [settingUrl, settingKey, settingModel, settingS2Key]) {
     input.addEventListener('change', () => {
       settings = {
         url: settingUrl.value || DEFAULTS.url,
         key: settingKey.value || DEFAULTS.key,
         model: settingModel.value || DEFAULTS.model,
+        s2Key: settingS2Key.value,
       };
       saveSettingsLocal(settings);
       saveSession();
@@ -390,7 +397,7 @@ export function initChat(pdfViewer) {
         }
       }
 
-      const paper = await invoke('resolve_citation', { query, queryType, apiKey: S2_API_KEY });
+      const paper = await invoke('resolve_citation', { query, queryType, apiKey: getS2ApiKey() });
       removeLoadingMessage(loadingEl);
 
       const authors = (paper.authors || []).join(', ');
@@ -489,7 +496,7 @@ export function initChat(pdfViewer) {
         queryType = 'search';
       }
 
-      const paper = await invoke('resolve_citation', { query, queryType, apiKey: S2_API_KEY });
+      const paper = await invoke('resolve_citation', { query, queryType, apiKey: getS2ApiKey() });
       const pdfUrl = paper.venue_pdf || paper.arxiv_pdf;
       if (!pdfUrl) { btn.textContent = 'No PDF found'; return; }
 
@@ -742,7 +749,7 @@ export function initChat(pdfViewer) {
           query = refText.replace(/^\s*\[\d+\]\s*/, '').replace(/^\s*\d+\.\s*/, '');
           queryType = 'search';
         }
-        const paper = await invoke('resolve_citation', { query, queryType, apiKey: S2_API_KEY });
+        const paper = await invoke('resolve_citation', { query, queryType, apiKey: getS2ApiKey() });
         resolved.push({ num, refText, paper });
       } catch (e) {
         resolved.push({ num, refText, paper: null, error: String(e) });
