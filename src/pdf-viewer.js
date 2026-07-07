@@ -1244,7 +1244,12 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
         const valid = nums.filter(n => n > 0);
         if (valid.length === 0) continue;
 
-        const mStart = bm.index + 1, mEnd = bm.index + bm[0].length - 1;
+        // Anchor the range on the digits, not just inside the brackets: the
+        // characters next to the brackets can be spaces inserted by the span
+        // join above, which exist in fullText but in no span, so a range
+        // boundary there never finds its segment.
+        const mStart = bm.index + bm[0].indexOf(bm[1]);
+        const mEnd = mStart + bm[1].length;
         const range = document.createRange();
         let ok = false;
         for (const seg of fullSegments) {
