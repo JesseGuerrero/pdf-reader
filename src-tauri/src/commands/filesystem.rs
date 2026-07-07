@@ -118,6 +118,30 @@ pub fn create_directory(path: String) -> Result<(), String> {
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
+// GUI apps don't inherit the shell profile's PATH, so check common install
+// locations before falling back to PATH lookup.
+fn find_ocrmypdf() -> Option<std::path::PathBuf> {
+    if let Some(home) = std::env::var_os("HOME") {
+        for rel in [".local/bin/ocrmypdf", ".local/pipx/venvs/ocrmypdf/bin/ocrmypdf"] {
+            let p = std::path::Path::new(&home).join(rel);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    for p in ["/usr/local/bin/ocrmypdf", "/usr/bin/ocrmypdf", "/opt/homebrew/bin/ocrmypdf"] {
+        let p = std::path::Path::new(p);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|d| d.join("ocrmypdf"))
+            .find(|p| p.is_file())
+    })
+}
+
 #[tauri::command]
 pub async fn ocr_pdf(pdf_path: String) -> Result<String, String> {
     let src = std::path::Path::new(&pdf_path);
@@ -129,7 +153,10 @@ pub async fn ocr_pdf(pdf_path: String) -> Result<String, String> {
     std::fs::copy(&pdf_path, &backup_path).map_err(|e| e.to_string())?;
 
     let tmp_out = format!("{}.ocr_tmp.pdf", pdf_path);
-    let output = std::process::Command::new("ocrmypdf")
+    let ocrmypdf = find_ocrmypdf().ok_or(
+        "ocrmypdf not found. Install it (e.g. `pipx install ocrmypdf`) and ensure it is on PATH or in ~/.local/bin.",
+    )?;
+    let output = std::process::Command::new(&ocrmypdf)
         .args(["--force-ocr", "--optimize", "0", &pdf_path, &tmp_out])
         .output()
         .map_err(|e| format!("Failed to run ocrmypdf: {}", e))?;
