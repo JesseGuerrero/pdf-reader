@@ -25,6 +25,23 @@ const DEFAULTS = {
   s2Key: '',
 };
 
+// Values from the project .env (via the backend), loaded during initChat.
+// Precedence: settings panel > .env > DEFAULTS.
+let ENV = {};
+
+async function loadEnvConfig() {
+  try {
+    const env = await invoke('get_env_config');
+    ENV = {};
+    if (env.LLM_API_URL) ENV.url = env.LLM_API_URL;
+    if (env.LLM_API_KEY) ENV.key = env.LLM_API_KEY;
+    if (env.LLM_MODEL) ENV.model = env.LLM_MODEL;
+    if (env.S2_API_KEY) ENV.s2Key = env.S2_API_KEY;
+  } catch (e) {
+    console.warn('[env] failed to load env config:', e);
+  }
+}
+
 // Semantic Scholar API key, configured in the settings panel.
 function getS2ApiKey() {
   return (loadSettings().s2Key || '').trim();
@@ -123,11 +140,16 @@ class ChatTree {
 // --- Settings ---
 
 function loadSettings() {
+  let saved = {};
   try {
-    const saved = localStorage.getItem('llm_settings');
-    if (saved) return { ...DEFAULTS, ...JSON.parse(saved) };
+    saved = JSON.parse(localStorage.getItem('llm_settings')) || {};
   } catch {}
-  return { ...DEFAULTS };
+  // Drop empty values and values that merely echo the built-in defaults
+  // (auto-saved fillers), so the .env can take effect for them.
+  for (const k of Object.keys(saved)) {
+    if (!saved[k] || saved[k] === DEFAULTS[k]) delete saved[k];
+  }
+  return { ...DEFAULTS, ...ENV, ...saved };
 }
 
 function saveSettingsLocal(s) {
@@ -175,10 +197,19 @@ export function initChat(pdfViewer) {
   }
 
   // Populate settings
-  settingUrl.value = settings.url;
-  settingKey.value = settings.key;
-  settingModel.value = settings.model;
-  settingS2Key.value = settings.s2Key;
+  function populateSettingsInputs() {
+    settingUrl.value = settings.url;
+    settingKey.value = settings.key;
+    settingModel.value = settings.model;
+    settingS2Key.value = settings.s2Key;
+  }
+  populateSettingsInputs();
+
+  // Async: refresh once the .env values arrive from the backend
+  loadEnvConfig().then(() => {
+    settings = loadSettings();
+    populateSettingsInputs();
+  });
 
   settingsBtn.addEventListener('click', () => settingsPanel.classList.toggle('open'));
 

@@ -2,6 +2,12 @@
 
 Tauri 2 desktop app for reading academic PDFs with AI chat, citation lookup, and reference management.
 
+## Configuration
+
+Copy `.env.example` to `.env` (project root) and fill in credentials
+(LLM API + Semantic Scholar key). The Rust backend reads it at launch;
+the in-app settings panel overrides `.env` values.
+
 ## Build & Run
 
 ```bash

@@ -13,3 +13,6 @@ wheels/
 src-tauri/target/
 node_modules/
 dist/
+
+# Secrets
+.env

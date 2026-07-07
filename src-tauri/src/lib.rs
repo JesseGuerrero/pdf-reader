@@ -15,6 +15,7 @@ pub fn run() {
             commands::filesystem::ocr_pdf,
             commands::filesystem::list_ocr_originals,
             commands::chat::send_chat_message,
+            commands::config::get_env_config,
             commands::storage::save_chat_tree,
             commands::storage::load_chat_tree,
             commands::storage::save_stamps,
