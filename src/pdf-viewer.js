@@ -206,7 +206,94 @@ export function initPdfViewer() {
     }
   });
   let onCommentStamp = null;
+  let onTextAnnotation = null;
   let selectionRect = null;
+
+  // --- Right-click "Add Text" context menu ---
+  let contextMenu = null;
+  let textEditor = null;
+
+  function removeContextMenu() {
+    if (contextMenu) { contextMenu.remove(); contextMenu = null; }
+  }
+
+  function removeTextEditor() {
+    if (textEditor) { textEditor.remove(); textEditor = null; }
+  }
+
+  function showTextEditor(x, y) {
+    removeTextEditor();
+    textEditor = document.createElement('div');
+    textEditor.className = 'comment-popup';
+    textEditor.style.left = (x * currentScale) + 'px';
+    textEditor.style.top = (y * currentScale) + 'px';
+
+    const ta = document.createElement('textarea');
+    ta.className = 'comment-popup-textarea';
+    ta.placeholder = 'Type overlay text...';
+    ta.rows = 2;
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'comment-popup-save';
+    saveBtn.textContent = 'Add';
+    saveBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const text = ta.value.trim();
+      if (text && onTextAnnotation) {
+        onTextAnnotation({ page: currentPage, x, y, text });
+      }
+      removeTextEditor();
+    });
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'comment-popup-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', (ev) => { ev.stopPropagation(); removeTextEditor(); });
+
+    ta.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); saveBtn.click(); }
+      if (ev.key === 'Escape') removeTextEditor();
+    });
+
+    textEditor.appendChild(ta);
+    const row = document.createElement('div');
+    row.className = 'comment-popup-row';
+    row.appendChild(saveBtn);
+    row.appendChild(cancelBtn);
+    textEditor.appendChild(row);
+    textEditor.addEventListener('mousedown', (ev) => ev.stopPropagation());
+    pageWrapper.appendChild(textEditor);
+    setTimeout(() => ta.focus(), 10);
+  }
+
+  pageWrapper.addEventListener('contextmenu', (e) => {
+    if (!currentPdf) return;
+    e.preventDefault();
+    removeContextMenu();
+    const wrapperRect = pageWrapper.getBoundingClientRect();
+    // Unscaled page coords, so the annotation stays put across zoom levels
+    const px = (e.clientX - wrapperRect.left) / currentScale;
+    const py = (e.clientY - wrapperRect.top) / currentScale;
+
+    contextMenu = document.createElement('div');
+    contextMenu.className = 'pdf-context-menu';
+    contextMenu.style.left = (e.clientX - wrapperRect.left) + 'px';
+    contextMenu.style.top = (e.clientY - wrapperRect.top) + 'px';
+
+    const addTextItem = document.createElement('button');
+    addTextItem.className = 'pdf-context-menu-item';
+    addTextItem.textContent = 'T Add Text';
+    addTextItem.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      removeContextMenu();
+      showTextEditor(px, py);
+    });
+    contextMenu.appendChild(addTextItem);
+    contextMenu.addEventListener('mousedown', (ev) => ev.stopPropagation());
+    pageWrapper.appendChild(contextMenu);
+  });
+
+  document.addEventListener('mousedown', () => removeContextMenu());
 
   pageWrapper.addEventListener('mouseup', (e) => {
     const wasDrag = isDragging;
@@ -1610,6 +1697,28 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
     const pageStamps = stamps.filter(st => st.pageNumber === currentPage);
     console.log('[stamps] rendering', pageStamps.length, 'stamps on page', currentPage, pageStamps.map(s => ({ id: s.id?.slice(0,8), messageId: s.messageId, isComment: !s.messageId })));
     for (const stamp of pageStamps) {
+      if (stamp.kind === 'text') {
+        // Text overlay annotation: content drawn directly on the page
+        const overlay = document.createElement('div');
+        overlay.className = 'text-annotation';
+        overlay.textContent = stamp.content;
+        overlay.style.left = (stamp.x * currentScale) + 'px';
+        overlay.style.top = (stamp.y * currentScale) + 'px';
+        overlay.style.fontSize = (13 * currentScale) + 'px';
+
+        overlay.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (onStampClick) onStampClick(stamp);
+        });
+        overlay.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (onStampDelete) onStampDelete(stamp);
+        });
+        container.appendChild(overlay);
+        continue;
+      }
+
       const isComment = !stamp.messageId;
 
       if (isComment) {
@@ -1757,6 +1866,7 @@ Output ONLY valid JSON, no markdown fences, no commentary.`,
     setOnStampClick: (cb) => { onStampClick = cb; },
     setOnStampDelete: (cb) => { onStampDelete = cb; },
     setOnCommentStamp: (cb) => { onCommentStamp = cb; },
+    setOnTextAnnotation: (cb) => { onTextAnnotation = cb; },
     setOnCiteResolve: (cb) => { onCiteResolve = cb; },
     setOnCitationChat: (cb) => { onCitationChat = cb; },
   };

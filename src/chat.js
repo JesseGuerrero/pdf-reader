@@ -600,6 +600,23 @@ export function initChat(pdfViewer) {
     pdfViewer.setStamps(currentStamps);
   });
 
+  pdfViewer.setOnTextAnnotation((pos) => {
+    const stamp = {
+      id: crypto.randomUUID(),
+      kind: 'text',
+      pdfPath: pdfViewer.getCurrentPath(),
+      pageNumber: pos.page,
+      x: pos.x,
+      y: pos.y,
+      messageId: null,
+      content: pos.text,
+      createdAt: new Date().toISOString(),
+    };
+    currentStamps.push(stamp);
+    saveStamps();
+    pdfViewer.setStamps(currentStamps);
+  });
+
   document.getElementById('btn-back-to-chat').addEventListener('click', () => {
     viewingStamp = null;
     stampView.style.display = 'none';
@@ -641,6 +658,7 @@ export function initChat(pdfViewer) {
         const idx = currentStamps.findIndex(s => s.id === viewingStamp.id);
         if (idx >= 0) currentStamps[idx].content = ta.value;
         saveStamps();
+        pdfViewer.setStamps(currentStamps);
         renderStampView();
       });
 
